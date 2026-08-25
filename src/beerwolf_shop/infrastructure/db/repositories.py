@@ -94,8 +94,9 @@ class SqlOrderRepository:
         limit: int = 10,
     ) -> list[Order]:
         stmt = self._filtered(status, order_type).offset(offset).limit(limit)
-        result = await self._session.exec(stmt)
-        return [row.to_domain() for row in result.all()]
+        # execute+scalars: session.exec() + selectinload yields Row, not OrderTable.
+        result = await self._session.execute(stmt)
+        return [row.to_domain() for row in result.scalars().all()]
 
     async def count_by_status(
         self,
@@ -107,20 +108,20 @@ class SqlOrderRepository:
             stmt = stmt.where(OrderTable.status == status.value)
         if order_type is not None:
             stmt = stmt.where(OrderTable.type == order_type.value)
-        result = await self._session.exec(stmt)
-        return int(result.one())
+        result = await self._session.execute(stmt)
+        return int(result.scalar_one())
 
     async def list_for_customer(self, telegram_id: int) -> list[Order]:
-        result = await self._session.exec(
+        result = await self._session.execute(
             select(OrderTable)
             .options(selectinload(OrderTable.links))
             .where(OrderTable.customer_telegram_id == telegram_id)
             .order_by(OrderTable.created_at.desc())
         )
-        return [row.to_domain() for row in result.all()]
+        return [row.to_domain() for row in result.scalars().all()]
 
     async def find_by_repo(self, owner: str, repo: str) -> list[Order]:
-        result = await self._session.exec(
+        result = await self._session.execute(
             select(OrderTable)
             .options(selectinload(OrderTable.links))
             .where(
@@ -128,7 +129,7 @@ class SqlOrderRepository:
                 func.lower(OrderTable.github_repo) == repo.lower(),
             )
         )
-        return [row.to_domain() for row in result.all()]
+        return [row.to_domain() for row in result.scalars().all()]
 
 
 class SqlCompletionLinkRepository:
@@ -136,12 +137,16 @@ class SqlCompletionLinkRepository:
         self._session = session
 
     async def list_for_order(self, order_id: UUID) -> list[CompletionLink]:
-        result = await self._session.exec(select(CompletionLinkTable).where(CompletionLinkTable.order_id == order_id))
-        return [row.to_domain() for row in result.all()]
+        result = await self._session.execute(
+            select(CompletionLinkTable).where(CompletionLinkTable.order_id == order_id)
+        )
+        return [row.to_domain() for row in result.scalars().all()]
 
     async def replace_for_order(self, order_id: UUID, links: list[CompletionLink]) -> None:
-        existing = await self._session.exec(select(CompletionLinkTable).where(CompletionLinkTable.order_id == order_id))
-        for row in existing.all():
+        existing = await self._session.execute(
+            select(CompletionLinkTable).where(CompletionLinkTable.order_id == order_id)
+        )
+        for row in existing.scalars().all():
             await self._session.delete(row)
         for link in links:
             self._session.add(CompletionLinkTable.from_domain(link))
