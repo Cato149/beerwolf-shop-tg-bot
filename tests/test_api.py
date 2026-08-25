@@ -5,6 +5,7 @@ from beerwolf_shop.application.dto import SubmitOrderDTO
 from beerwolf_shop.domain.enums import OrderStatus
 from beerwolf_shop.main import create_app
 from beerwolf_shop.presentation.api.deps import get_context, get_settings
+
 from tests.fakes import FakeContext, make_test_settings
 from tests.test_auth import make_init_data
 

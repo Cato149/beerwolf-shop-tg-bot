@@ -44,10 +44,10 @@ async def test_get_repo_and_graphql_mocked() -> None:
 
 @pytest.mark.asyncio
 async def test_progress_and_customer_request() -> None:
-    from tests.fakes import FakeContext
-
     from beerwolf_shop.application.dto import CustomerRequestDTO, LinkGithubDTO, SubmitOrderDTO
     from beerwolf_shop.domain.enums import OrderStatus
+
+    from tests.fakes import FakeContext
 
     ctx = FakeContext()
     order = await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=5, display_name="A", idea="ui"))

@@ -8,6 +8,7 @@ import pytest
 
 from beerwolf_shop.application.auth import create_access_token, validate_telegram_init_data
 from beerwolf_shop.domain.exceptions import AuthError
+
 from tests.fakes import make_test_settings
 
 

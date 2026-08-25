@@ -38,6 +38,7 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["beerwolf_shop"]
+known-local-folder = ["tests"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

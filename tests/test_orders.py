@@ -1,9 +1,10 @@
 import pytest
-from tests.fakes import FakeContext
 
 from beerwolf_shop.application.dto import CompleteOrderDTO, LinkGithubDTO, SubmitOrderDTO
 from beerwolf_shop.domain.enums import OrderStatus, OrderType
 from beerwolf_shop.domain.exceptions import InvalidStatusTransitionError
+
+from tests.fakes import FakeContext
 
 
 @pytest.mark.asyncio
