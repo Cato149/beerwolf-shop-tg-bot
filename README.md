@@ -185,13 +185,28 @@ Environment в GitHub: **production** (Settings → Environments).
 | `DEPLOY_PATH` | абсолютный путь клона на сервере |
 | `DEPLOY_SSH_PORT` | SSH-порт, по умолчанию `22` |
 
-Первый раз на сервере: пользователь в группе `docker`, sudo без пароля на `cp`/`systemctl reload caddy`. Каталог `DEPLOY_PATH` должен быть **пустым** (или ещё не существовать). CI клонирует репозиторий по HTTPS с `GITHUB_TOKEN` workflow — Deploy key и SSH к github.com на VPS не нужны. `.env` руками не нужен — его пишет CI из `APP_ENV`.
+Первый раз на сервере: пользователь `DEPLOY_USER` в группе `docker`, sudo без пароля на `cp`/`systemctl reload caddy`. Каталог `DEPLOY_PATH` пустой или его ещё нет. `.env` руками не нужен.
 
-Если `/opt/tg-bot` уже занят (в том числе пустой каталог после неудачного clone) — удалите его и перезапустите workflow:
+Два разных SSH-ключа:
+
+1. **`DEPLOY_SSH_KEY`** в GitHub — вход CI на VPS (публичная часть в `authorized_keys` на сервере).
+2. **Deploy key репозитория** — вход VPS на `github.com`. Приватный ключ лежит на сервере как `~/.ssh/github_deploy`, публичный — Settings → Deploy keys (read-only).
+
+На VPS под `DEPLOY_USER`:
 
 ```bash
-sudo rm -rf /opt/tg-bot
+ssh-keygen -t ed25519 -f ~/.ssh/github_deploy -N ""
+cat ~/.ssh/github_deploy.pub   # эту строку в Deploy keys
+chmod 600 ~/.ssh/github_deploy
+
+# проверка (должно быть Hi! You've successfully authenticated)
+ssh -i ~/.ssh/github_deploy -o UserKnownHostsFile=/dev/null \
+  -o StrictHostKeyChecking=accept-new -T git@github.com || true
+
+sudo rm -rf /opt/tg-bot   # если прошлый clone сломан
 ```
+
+CI подставляет официальные host keys GitHub (`deploy/github_known_hosts`), поэтому `Host key verification failed` больше не должен появляться. Не используйте публичный ключ от `DEPLOY_SSH_KEY` как Deploy key: его приватная часть есть только в Actions, на VPS её нет.
 
 ## Gitflow
 

@@ -35,8 +35,6 @@ jobs:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     environment: production
-    permissions:
-      contents: read
     concurrency:
       group: production-deploy
       cancel-in-progress: false
@@ -46,7 +44,6 @@ jobs:
         env:
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
           APP_ENV: ${{ secrets.APP_ENV }}
-          GH_CLONE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -55,18 +52,30 @@ jobs:
           port: ${{ vars.DEPLOY_SSH_PORT || 22 }}
           script_stop: true
           command_timeout: 20m
-          envs: DEPLOY_PATH,APP_ENV,GH_CLONE_TOKEN,GITHUB_REPOSITORY
+          envs: DEPLOY_PATH,APP_ENV,GITHUB_REPOSITORY
           script: |
             set -eu
-            ORIGIN_URL="https://github.com/${GITHUB_REPOSITORY}.git"
+            mkdir -p "${HOME}/.ssh"
+            chmod 700 "${HOME}/.ssh"
+            # Official GitHub host keys (same as deploy/github_known_hosts).
+            cat > "${HOME}/.ssh/github_known_hosts" <<'EOF'
+            github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+            github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+            github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+            EOF
+            GIT_SSH_COMMAND="ssh -o UserKnownHostsFile=${HOME}/.ssh/github_known_hosts -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes"
+            if [ -f "${HOME}/.ssh/github_deploy" ]; then
+              GIT_SSH_COMMAND="${GIT_SSH_COMMAND} -i ${HOME}/.ssh/github_deploy"
+            fi
+            export GIT_SSH_COMMAND
+            ORIGIN_URL="git@github.com:${GITHUB_REPOSITORY}.git"
             if [ ! -d "$DEPLOY_PATH/.git" ]; then
               if [ -d "$DEPLOY_PATH" ] && [ -n "$(ls -A "$DEPLOY_PATH" 2>/dev/null || true)" ]; then
                 echo "deploy: $DEPLOY_PATH exists but is not a git clone. Empty it and re-run." >&2
                 exit 1
               fi
               mkdir -p "$(dirname "$DEPLOY_PATH")"
-              git -c "http.extraheader=AUTHORIZATION: bearer ${GH_CLONE_TOKEN}" \
-                clone --branch main "$ORIGIN_URL" "$DEPLOY_PATH"
+              git clone --branch main "$ORIGIN_URL" "$DEPLOY_PATH"
             fi
             cd "$DEPLOY_PATH"
             DEPLOY_BRANCH=main ./scripts/deploy.sh
