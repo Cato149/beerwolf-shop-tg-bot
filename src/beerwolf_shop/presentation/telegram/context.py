@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import BaseMiddleware
-from aiogram.types import CallbackQuery, Message, TelegramObject
+from aiogram.types import CallbackQuery, Message, TelegramObject, User as TgUser
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -109,8 +109,10 @@ class DbMiddleware(BaseMiddleware):
             data["ctx"] = ctx
             data["settings"] = self._settings
             data["i18n"] = self._i18n
-            from_user = None
-            if isinstance(event, (Message, CallbackQuery)):
+            # Registered on Update (outer). Message/CallbackQuery are nested events —
+            # take Telegram user from UserContextMiddleware, not isinstance(event, Message).
+            from_user: TgUser | None = data.get("event_from_user")
+            if from_user is None and isinstance(event, (Message, CallbackQuery)):
                 from_user = event.from_user
             if from_user:
                 user = await ctx.upsert_user.execute(

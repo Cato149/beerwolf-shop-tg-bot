@@ -20,8 +20,8 @@ class SqlUserRepository:
         self._session = session
 
     async def get_by_telegram_id(self, telegram_id: int) -> User | None:
-        result = await self._session.exec(select(UserTable).where(UserTable.telegram_id == telegram_id))
-        row = result.first()
+        result = await self._session.execute(select(UserTable).where(UserTable.telegram_id == telegram_id))
+        row = result.scalars().first()
         return row.to_domain() if row else None
 
     async def get_by_username(self, username: str) -> User | None:
