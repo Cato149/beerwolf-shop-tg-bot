@@ -1,0 +1,12 @@
+# Local lazysql connection for the Compose Postgres instance.
+# Credentials are read from the environment (same names as .env).
+# Run: set -a && source .env && set +a && lazysql
+
+[application]
+DefaultPageSize = 200
+
+[[database]]
+Name = "beerwolf local"
+Provider = "postgres"
+DBName = "beerwolf"
+URL = "postgres://${env:POSTGRES_USER}:${env:POSTGRES_PASSWORD}@localhost:5432/${env:POSTGRES_DB}?sslmode=disable"

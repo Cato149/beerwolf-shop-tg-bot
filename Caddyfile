@@ -1,0 +1,26 @@
+# Host Caddy (not a Compose service) terminates TLS and proxies to the app container.
+#
+# Load project env so {$CADDY_DOMAIN}, {$CADDY_EMAIL}, {$APP_PORT} resolve:
+#   caddy run --envfile .env --config Caddyfile
+# Debian/Ubuntu package: drop-in with EnvironmentFile= pointing at this repo's .env,
+# then copy/symlink this file to /etc/caddy/Caddyfile and `systemctl reload caddy`.
+#
+# DNS A/AAAA for CADDY_DOMAIN must point at the server; ports 80 and 443 must be open.
+
+{
+	# ACME account email for Let's Encrypt / ZeroSSL certificate notices.
+	email {$CADDY_EMAIL}
+}
+
+{$CADDY_DOMAIN} {
+	encode gzip zstd
+
+	# Uvicorn in Docker, published on loopback only (see docker-compose.yml).
+	reverse_proxy 127.0.0.1:{$APP_PORT} {
+		# Webhooks (Telegram updates, GitHub issue payloads) can be slower than page hits.
+		transport http {
+			read_timeout 60s
+			write_timeout 60s
+		}
+	}
+}

@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop, "feature/**"]
+  pull_request:
+  # Manual run from the Actions tab; deploy still only runs on main.
+  workflow_dispatch:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv sync --group dev
+      - name: Ruff
+        run: uv run ruff check src tests
+      - name: Pytest
+        run: uv run pytest
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t beerwolf-shop:ci .
+
+  deploy:
+    name: Deploy to production
+    needs: [lint-and-test, docker]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.2
+        env:
+          # Absolute path of the git clone on the VPS (secret, not a repo variable).
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          # Empty secret falls back to 22.
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          script_stop: true
+          command_timeout: 20m
+          envs: DEPLOY_PATH
+          script: |
+            set -eu
+            cd "$DEPLOY_PATH"
+            # Fast-forward first so this commit's scripts/deploy.sh exists on the host.
+            git fetch origin main
+            git checkout -B main origin/main
+            DEPLOY_BRANCH=main ./scripts/deploy.sh
