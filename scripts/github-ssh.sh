@@ -1,7 +1,7 @@
 #!/bin/sh
-# Pin GitHub SSH host keys and optional deploy-key identity.
+# Pin GitHub SSH host keys and pick a deploy-key identity.
 # Source:  . scripts/github-ssh.sh
-# Optional: GIT_SSH_IDENTITY=/home/deploy/.ssh/github_deploy
+# Optional: GIT_SSH_KEY (private key body) or GIT_SSH_IDENTITY=/path/to/key
 
 mkdir -p "${HOME}/.ssh"
 chmod 700 "${HOME}/.ssh"
@@ -16,12 +16,30 @@ github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+V
 EOF
 chmod 644 "${_github_hosts_file}"
 
-_github_ssh="ssh -o UserKnownHostsFile=${_github_hosts_file} -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes"
-
-_identity="${GIT_SSH_IDENTITY:-${HOME}/.ssh/github_deploy}"
-if [ -f "${_identity}" ]; then
-	_github_ssh="${_github_ssh} -i ${_identity}"
+# Actions can inject the Deploy key private key; persist it for later git fetch.
+if [ -n "${GIT_SSH_KEY:-}" ]; then
+	printf '%s' "$GIT_SSH_KEY" >"${HOME}/.ssh/github_deploy"
+	[ -n "$(tail -c 1 "${HOME}/.ssh/github_deploy")" ] && printf '\n' >>"${HOME}/.ssh/github_deploy"
+	chmod 600 "${HOME}/.ssh/github_deploy"
 fi
 
-export GIT_SSH_COMMAND="${_github_ssh}"
-unset _github_ssh _identity _github_hosts_file
+_identity="${GIT_SSH_IDENTITY:-}"
+if [ -z "${_identity}" ]; then
+	for _candidate in "${HOME}/.ssh/bot-bw-deploy" "${HOME}/.ssh/github_deploy" "${HOME}/.ssh/id_ed25519" "${HOME}/.ssh/id_rsa"; do
+		if [ -f "${_candidate}" ]; then
+			_identity="${_candidate}"
+			break
+		fi
+	done
+fi
+
+if [ -z "${_identity}" ]; then
+	echo "github-ssh: no private key for git@github.com" >&2
+	echo "Put the Deploy key at ~/.ssh/bot-bw-deploy or set secret GIT_SSH_KEY" >&2
+	ls -la "${HOME}/.ssh" >&2 || true
+	unset _identity _github_hosts_file _candidate
+	return 1 2>/dev/null || exit 1
+fi
+
+export GIT_SSH_COMMAND="ssh -o UserKnownHostsFile=${_github_hosts_file} -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes -i ${_identity}"
+unset _identity _github_hosts_file _candidate

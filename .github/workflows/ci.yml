@@ -45,14 +45,14 @@ jobs:
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
           APP_ENV: ${{ secrets.APP_ENV }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          GIT_SSH_KEY: ${{ secrets.GIT_SSH_KEY }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ vars.DEPLOY_SSH_PORT || 22 }}
-          script_stop: true
           command_timeout: 20m
-          envs: DEPLOY_PATH,APP_ENV,GITHUB_REPOSITORY
+          envs: DEPLOY_PATH,APP_ENV,GITHUB_REPOSITORY,GIT_SSH_KEY
           script: |
             set -eu
             mkdir -p "${HOME}/.ssh"
@@ -63,11 +63,25 @@ jobs:
             github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
             github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
             EOF
-            GIT_SSH_COMMAND="ssh -o UserKnownHostsFile=${HOME}/.ssh/github_known_hosts -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes"
-            if [ -f "${HOME}/.ssh/github_deploy" ]; then
-              GIT_SSH_COMMAND="${GIT_SSH_COMMAND} -i ${HOME}/.ssh/github_deploy"
+            if [ -n "${GIT_SSH_KEY:-}" ]; then
+              printf '%s' "$GIT_SSH_KEY" > "${HOME}/.ssh/github_deploy"
+              [ -n "$(tail -c 1 "${HOME}/.ssh/github_deploy")" ] && printf '\n' >> "${HOME}/.ssh/github_deploy"
+              chmod 600 "${HOME}/.ssh/github_deploy"
             fi
-            export GIT_SSH_COMMAND
+            IDENTITY=""
+            for candidate in "${HOME}/.ssh/bot-bw-deploy" "${HOME}/.ssh/github_deploy" "${HOME}/.ssh/id_ed25519" "${HOME}/.ssh/id_rsa"; do
+              if [ -f "$candidate" ]; then
+                IDENTITY="$candidate"
+                break
+              fi
+            done
+            if [ -z "$IDENTITY" ]; then
+              echo "deploy: no SSH key for git@github.com." >&2
+              echo "Add secret GIT_SSH_KEY (Deploy key private key) or put it at ~/.ssh/bot-bw-deploy" >&2
+              ls -la "${HOME}/.ssh" >&2 || true
+              exit 1
+            fi
+            export GIT_SSH_COMMAND="ssh -o UserKnownHostsFile=${HOME}/.ssh/github_known_hosts -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes -i ${IDENTITY}"
             ORIGIN_URL="git@github.com:${GITHUB_REPOSITORY}.git"
             if [ ! -d "$DEPLOY_PATH/.git" ]; then
               if [ -d "$DEPLOY_PATH" ] && [ -n "$(ls -A "$DEPLOY_PATH" 2>/dev/null || true)" ]; then

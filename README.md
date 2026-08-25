@@ -174,7 +174,8 @@ Environment в GitHub: **production** (Settings → Environments).
 | `APP_ENV` | полный текст `.env` (как `.env.example`, реальные значения) |
 | `DEPLOY_HOST` | IP или hostname сервера |
 | `DEPLOY_USER` | SSH-пользователь |
-| `DEPLOY_SSH_KEY` | приватный ключ |
+| `DEPLOY_SSH_KEY` | приватный ключ входа CI на VPS |
+| `GIT_SSH_KEY` | приватный ключ **Deploy key** репозитория (тот же, чей `.pub` в Settings → Deploy keys) |
 
 В `APP_ENV` для Compose укажите `DATABASE_URL` с хостом `db`, `BOT_MODE=webhook`, `PUBLIC_BASE_URL` / `CADDY_DOMAIN` / `CADDY_EMAIL` как на проде.
 
@@ -190,23 +191,17 @@ Environment в GitHub: **production** (Settings → Environments).
 Два разных SSH-ключа:
 
 1. **`DEPLOY_SSH_KEY`** в GitHub — вход CI на VPS (публичная часть в `authorized_keys` на сервере).
-2. **Deploy key репозитория** — вход VPS на `github.com`. Приватный ключ лежит на сервере как `~/.ssh/github_deploy`, публичный — Settings → Deploy keys (read-only).
+2. **Deploy key репозитория** — вход VPS на `github.com`. Публичный ключ — Settings → Deploy keys (read-only). Приватный файл на сервере: **`~/.ssh/bot-bw-deploy`** (CI его подхватит). Либо секрет `GIT_SSH_KEY` — тогда ключ запишется как `~/.ssh/github_deploy`.
 
-На VPS под `DEPLOY_USER`:
+Не кладите в Deploy keys публичную часть от `DEPLOY_SSH_KEY`: этот приватный ключ есть только в Actions, `git clone` на VPS его не видит.
 
 ```bash
-ssh-keygen -t ed25519 -f ~/.ssh/github_deploy -N ""
-cat ~/.ssh/github_deploy.pub   # эту строку в Deploy keys
-chmod 600 ~/.ssh/github_deploy
-
-# проверка (должно быть Hi! You've successfully authenticated)
-ssh -i ~/.ssh/github_deploy -o UserKnownHostsFile=/dev/null \
-  -o StrictHostKeyChecking=accept-new -T git@github.com || true
+ssh-keygen -t ed25519 -f github_deploy -N ""
+# github_deploy.pub → Deploy keys
+# содержимое github_deploy → секрет GIT_SSH_KEY (весь файл, с BEGIN/END)
 
 sudo rm -rf /opt/tg-bot   # если прошлый clone сломан
 ```
-
-CI подставляет официальные host keys GitHub (`deploy/github_known_hosts`), поэтому `Host key verification failed` больше не должен появляться. Не используйте публичный ключ от `DEPLOY_SSH_KEY` как Deploy key: его приватная часть есть только в Actions, на VPS её нет.
 
 ## Gitflow
 

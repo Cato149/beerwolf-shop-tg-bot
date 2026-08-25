@@ -6,7 +6,7 @@ set -eu
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-# Pin github.com host keys; use ~/.ssh/github_deploy when that file exists.
+# Pin github.com host keys; use ~/.ssh/bot-bw-deploy when that file exists.
 # shellcheck disable=SC1091
 . "$ROOT/scripts/github-ssh.sh"
 
