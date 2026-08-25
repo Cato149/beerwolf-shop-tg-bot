@@ -185,7 +185,15 @@ Environment в GitHub: **production** (Settings → Environments).
 | `DEPLOY_PATH` | абсолютный путь клона на сервере |
 | `DEPLOY_SSH_PORT` | SSH-порт, по умолчанию `22` |
 
-Первый раз на сервере: клон репозитория, deploy key для `git fetch`, пользователь в группе `docker`, для reload Caddy — `sudo` без пароля на `cp`/`systemctl reload caddy`. `.env` руками создавать не нужно — его пишет CI.
+Первый раз на сервере: пользователь в группе `docker`, sudo без пароля на `cp`/`systemctl reload caddy`. Каталог `DEPLOY_PATH` должен быть **пустым** (или ещё не существовать) — CI сам сделает `git clone`. Для приватного репозитория на VPS нужен SSH-ключ к **github.com** (Deploy key в настройках репо, `~/.ssh` пользователя `DEPLOY_USER`). Это не тот ключ, что в `DEPLOY_SSH_KEY`. `.env` руками не нужен — его пишет CI из `APP_ENV`.
+
+Если `/opt/tg-bot` уже занят файлами без `.git` — очистите его или клонируйте вручную:
+
+```bash
+sudo mkdir -p /opt/tg-bot
+sudo chown "$USER:$USER" /opt/tg-bot
+git clone git@github.com:ORG/beerwolf-shop-tg-bot.git /opt/tg-bot
+```
 
 ## Gitflow
 
