@@ -1,6 +1,6 @@
 #!/bin/sh
 # Production update on the VPS: sync git, write .env, rebuild Compose, reload host Caddy.
-# GitHub Actions passes APP_ENV (full dotenv text). Local runs can reuse an existing .env.
+# GitHub Actions passes APP_ENV and GH_CLONE_TOKEN (HTTPS, no github.com SSH on the VPS).
 set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
@@ -9,7 +9,13 @@ cd "$ROOT"
 # Branch to fast-forward onto (CI sets main).
 BRANCH="${DEPLOY_BRANCH:-main}"
 
-git fetch origin "$BRANCH"
+if [ -n "${GH_CLONE_TOKEN:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ]; then
+	git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+	# Token only in the git process env, not stored in .git/config.
+	git -c "http.extraheader=AUTHORIZATION: bearer ${GH_CLONE_TOKEN}" fetch origin "$BRANCH"
+else
+	git fetch origin "$BRANCH"
+fi
 git checkout -B "$BRANCH" "origin/$BRANCH"
 
 if [ -n "${APP_ENV:-}" ]; then

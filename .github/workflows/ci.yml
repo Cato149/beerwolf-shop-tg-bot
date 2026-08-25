@@ -35,18 +35,19 @@ jobs:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     environment: production
+    permissions:
+      contents: read
     concurrency:
       group: production-deploy
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
-
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.2.2
         env:
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
           APP_ENV: ${{ secrets.APP_ENV }}
-          DEPLOY_GIT_URL: git@github.com:${{ github.repository }}.git
+          GH_CLONE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
@@ -54,19 +55,18 @@ jobs:
           port: ${{ vars.DEPLOY_SSH_PORT || 22 }}
           script_stop: true
           command_timeout: 20m
-          envs: DEPLOY_PATH,APP_ENV,DEPLOY_GIT_URL
+          envs: DEPLOY_PATH,APP_ENV,GH_CLONE_TOKEN,GITHUB_REPOSITORY
           script: |
             set -eu
+            ORIGIN_URL="https://github.com/${GITHUB_REPOSITORY}.git"
             if [ ! -d "$DEPLOY_PATH/.git" ]; then
               if [ -d "$DEPLOY_PATH" ] && [ -n "$(ls -A "$DEPLOY_PATH" 2>/dev/null || true)" ]; then
-                echo "deploy: $DEPLOY_PATH exists but is not a git clone." >&2
-                echo "Empty it, or: git clone $DEPLOY_GIT_URL $DEPLOY_PATH" >&2
+                echo "deploy: $DEPLOY_PATH exists but is not a git clone. Empty it and re-run." >&2
                 exit 1
               fi
               mkdir -p "$(dirname "$DEPLOY_PATH")"
-              git clone --branch main "$DEPLOY_GIT_URL" "$DEPLOY_PATH"
+              git -c "http.extraheader=AUTHORIZATION: bearer ${GH_CLONE_TOKEN}" \
+                clone --branch main "$ORIGIN_URL" "$DEPLOY_PATH"
             fi
             cd "$DEPLOY_PATH"
-            git fetch origin main
-            git checkout -B main origin/main
             DEPLOY_BRANCH=main ./scripts/deploy.sh
