@@ -41,26 +41,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Write production .env
-        env:
-          APP_ENV: ${{ secrets.APP_ENV }}
-        run: ./scripts/write-env.sh
-
-      - name: Copy .env to the server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          port: ${{ vars.DEPLOY_SSH_PORT || 22 }}
-          source: .env
-          target: ${{ vars.DEPLOY_PATH }}
-          overwrite: true
-
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.2.2
         env:
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          APP_ENV: ${{ secrets.APP_ENV }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
@@ -68,9 +53,10 @@ jobs:
           port: ${{ vars.DEPLOY_SSH_PORT || 22 }}
           script_stop: true
           command_timeout: 20m
-          envs: DEPLOY_PATH
+          envs: DEPLOY_PATH,APP_ENV
           script: |
             set -eu
             cd "$DEPLOY_PATH"
-            chmod 600 .env
+            git fetch origin main
+            git checkout -B main origin/main
             DEPLOY_BRANCH=main ./scripts/deploy.sh

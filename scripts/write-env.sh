@@ -23,7 +23,7 @@ if ! grep -q '^BOT_TOKEN=' "$tmp" || ! grep -q '^DATABASE_URL=' "$tmp"; then
 	exit 1
 fi
 
-chmod 600 "$tmp"
+chmod 644 "$tmp"
 mv "$tmp" "$ENV_FILE"
 trap - EXIT INT HUP TERM
 

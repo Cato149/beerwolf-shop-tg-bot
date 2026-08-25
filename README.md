@@ -162,9 +162,8 @@ lazysql
 
 После зелёных `lint-and-test` и `docker` push (или ручной `workflow_dispatch`) в `main` job **Deploy to production**:
 
-1. пишет `.env` из секрета `APP_ENV` (весь файл одним значением);
-2. копирует `.env` на VPS по SCP;
-3. по SSH делает `git pull`, `docker compose up --build -d`, копирует `Caddyfile` в `/etc/caddy/` и `systemctl reload`.
+1. по SSH передаёт секрет `APP_ENV` и на сервере пишет `.env` (`chmod 600`);
+2. делает `git pull`, `docker compose up --build -d`, копирует `Caddyfile` в `/etc/caddy/` и `systemctl reload`.
 
 Environment в GitHub: **production** (Settings → Environments).
 
