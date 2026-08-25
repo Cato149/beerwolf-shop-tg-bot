@@ -50,9 +50,9 @@ async def get_current_telegram_id(
         raise HTTPException(status.HTTP_403_FORBIDDEN, "admin_token_on_customer_route")
     try:
         payload = decode_access_token(settings, credentials.credentials)
-    except AuthError as exc:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
-    return int(payload["sub"])
+        return int(payload["sub"])
+    except (AuthError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid_token") from exc
 
 
 async def require_admin(

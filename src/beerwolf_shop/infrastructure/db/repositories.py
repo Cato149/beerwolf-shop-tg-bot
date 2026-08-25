@@ -3,6 +3,7 @@
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from beerwolf_shop.domain.entities import CompletionLink, Order, User
@@ -25,12 +26,11 @@ class SqlUserRepository:
         return row.to_domain() if row else None
 
     async def get_by_username(self, username: str) -> User | None:
-        normalized = username.lstrip("@").lower()
-        result = await self._session.exec(select(UserTable))
-        for row in result.all():
-            if row.username and row.username.lstrip("@").lower() == normalized:
-                return row.to_domain()
-        return None
+        needle = username.lstrip("@").lower()
+        stmt = select(UserTable).where(func.lower(func.ltrim(UserTable.username, "@")) == needle)
+        result = await self._session.execute(stmt)
+        row = result.scalars().first()
+        return row.to_domain() if row else None
 
     async def add(self, user: User) -> User:
         row = UserTable.from_domain(user)
@@ -116,8 +116,8 @@ class SqlOrderRepository:
     async def find_by_repo(self, owner: str, repo: str) -> list[Order]:
         result = await self._session.exec(
             select(OrderTable).where(
-                OrderTable.github_owner == owner,
-                OrderTable.github_repo == repo,
+                func.lower(OrderTable.github_owner) == owner.lower(),
+                func.lower(OrderTable.github_repo) == repo.lower(),
             )
         )
         return [row.to_domain() for row in result.all()]
@@ -144,10 +144,17 @@ class SqlWebhookDeliveryRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def seen(self, delivery_id: str) -> bool:
-        row = await self._session.get(WebhookDeliveryTable, delivery_id)
-        return row is not None
+    async def claim(self, delivery_id: str) -> bool:
+        """Insert delivery id; return False if another worker already claimed it.
 
-    async def mark(self, delivery_id: str) -> None:
-        self._session.add(WebhookDeliveryTable(delivery_id=delivery_id))
-        await self._session.flush()
+        Uses a SAVEPOINT so a unique-key race does not abort the outer transaction.
+        """
+        if await self._session.get(WebhookDeliveryTable, delivery_id):
+            return False
+        try:
+            async with self._session.begin_nested():
+                self._session.add(WebhookDeliveryTable(delivery_id=delivery_id))
+                await self._session.flush()
+        except IntegrityError:
+            return False
+        return True

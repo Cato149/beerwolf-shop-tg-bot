@@ -3,11 +3,10 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 
 from beerwolf_shop.application.dto import CustomerRequestDTO, SubmitOrderDTO
 from beerwolf_shop.domain.entities import Order
-from beerwolf_shop.domain.exceptions import AccessDeniedError, DomainError, OrderNotFoundError
 from beerwolf_shop.presentation.api.deps import get_context, get_current_telegram_id
 from beerwolf_shop.presentation.api.schemas import (
     CompletionLinkOut,
@@ -100,12 +99,7 @@ async def get_order(
     telegram_id: Annotated[int, Depends(get_current_telegram_id)],
     ctx: Annotated[AppContext, Depends(get_context)],
 ) -> OrderOut:
-    try:
-        order = await ctx.get_order.execute(order_id, actor_telegram_id=telegram_id)
-    except OrderNotFoundError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "order_not_found") from exc
-    except AccessDeniedError as exc:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden") from exc
+    order = await ctx.get_order.execute(order_id, actor_telegram_id=telegram_id)
     return to_order_out(order)
 
 
@@ -120,10 +114,7 @@ async def progress(
     telegram_id: Annotated[int, Depends(get_current_telegram_id)],
     ctx: Annotated[AppContext, Depends(get_context)],
 ) -> ProgressOut:
-    try:
-        snapshot = await ctx.build_progress.execute(order_id, actor_telegram_id=telegram_id)
-    except DomainError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    snapshot = await ctx.build_progress.execute(order_id, actor_telegram_id=telegram_id)
     return ProgressOut.model_validate(snapshot.model_dump())
 
 
@@ -138,10 +129,7 @@ async def links(
     telegram_id: Annotated[int, Depends(get_current_telegram_id)],
     ctx: Annotated[AppContext, Depends(get_context)],
 ) -> list[CompletionLinkOut]:
-    try:
-        order = await ctx.get_order.execute(order_id, actor_telegram_id=telegram_id)
-    except DomainError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    order = await ctx.get_order.execute(order_id, actor_telegram_id=telegram_id)
     return [CompletionLinkOut(id=link.id, url=link.url, title=link.title) for link in order.links]
 
 
@@ -158,17 +146,14 @@ async def create_request(
     telegram_id: Annotated[int, Depends(get_current_telegram_id)],
     ctx: Annotated[AppContext, Depends(get_context)],
 ) -> CustomerRequestOut:
-    try:
-        url = await ctx.create_request.execute(
-            CustomerRequestDTO(
-                order_id=order_id,
-                title=body.title,
-                body=body.body,
-                actor_telegram_id=telegram_id,
-            )
+    url = await ctx.create_request.execute(
+        CustomerRequestDTO(
+            order_id=order_id,
+            title=body.title,
+            body=body.body,
+            actor_telegram_id=telegram_id,
         )
-    except DomainError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    )
     return CustomerRequestOut(html_url=url)
 
 
@@ -185,17 +170,14 @@ async def create_support(
     telegram_id: Annotated[int, Depends(get_current_telegram_id)],
     ctx: Annotated[AppContext, Depends(get_context)],
 ) -> OrderOut:
-    try:
-        ticket, _parent = await ctx.create_support.execute(
-            parent_order_id=order_id,
-            actor_telegram_id=telegram_id,
-            idea=body.idea,
-            extra_contacts=body.extra_contacts,
-            references=body.references,
-            budget=body.budget,
-        )
-    except DomainError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    ticket, _parent = await ctx.create_support.execute(
+        parent_order_id=order_id,
+        actor_telegram_id=telegram_id,
+        idea=body.idea,
+        extra_contacts=body.extra_contacts,
+        references=body.references,
+        budget=body.budget,
+    )
     user = await ctx.users.get_by_telegram_id(telegram_id)
     await ctx.notifier.notify_admins_new_order(ticket, user)
     return to_order_out(ticket)

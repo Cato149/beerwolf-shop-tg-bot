@@ -42,6 +42,8 @@ def make_test_settings() -> Settings:
     return Settings(
         bot_token="123:test",
         bot_mode=BotMode.webhook,
+        public_base_url="",
+        telegram_webhook_secret="tg-secret",
         admin_api_token="admin-secret",
         admin_telegram_ids="1",
         admin_telegram_contact="@admin",
@@ -118,7 +120,13 @@ class FakeOrderRepo:
         return [o for o in self.items.values() if o.customer_telegram_id == telegram_id]
 
     async def find_by_repo(self, owner: str, repo: str) -> list[Order]:
-        return [o for o in self.items.values() if o.github_owner == owner and o.github_repo == repo]
+        owner_key = owner.lower()
+        repo_key = repo.lower()
+        return [
+            o
+            for o in self.items.values()
+            if (o.github_owner or "").lower() == owner_key and (o.github_repo or "").lower() == repo_key
+        ]
 
 
 class FakeLinkRepo:
@@ -136,11 +144,11 @@ class FakeDeliveryRepo:
     def __init__(self) -> None:
         self.ids: set[str] = set()
 
-    async def seen(self, delivery_id: str) -> bool:
-        return delivery_id in self.ids
-
-    async def mark(self, delivery_id: str) -> None:
+    async def claim(self, delivery_id: str) -> bool:
+        if delivery_id in self.ids:
+            return False
         self.ids.add(delivery_id)
+        return True
 
 
 class FakeGithub:
@@ -212,6 +220,8 @@ class FakeGithub:
         return issue
 
     async def add_issue_to_project(self, project_id: str, content_id: str) -> str:
+        if getattr(self, "add_project_error", None):
+            raise self.add_project_error
         return "PVTI_1"
 
     async def set_project_status(self, project_id: str, item_id: str, status_field_name: str, option_name: str) -> None:

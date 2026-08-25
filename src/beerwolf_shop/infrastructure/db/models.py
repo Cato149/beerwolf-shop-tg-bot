@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import BigInteger, Column, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Column, DateTime, Text, UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
 
 from beerwolf_shop.domain.entities import CompletionLink, Order, User
@@ -22,8 +22,8 @@ class UserTable(SQLModel, table=True):
     username: str | None = Field(default=None, index=True)
     display_name: str
     language: str = Field(default="ru")
-    created_at: datetime = Field(default_factory=_utcnow)
-    updated_at: datetime = Field(default_factory=_utcnow)
+    created_at: datetime = Field(default_factory=_utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
+    updated_at: datetime = Field(default_factory=_utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
 
     def to_domain(self) -> User:
         return User(
@@ -73,8 +73,8 @@ class OrderTable(SQLModel, table=True):
     github_project_id: str | None = None
     project_display_name: str | None = None
     completion_message: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
-    created_at: datetime = Field(default_factory=_utcnow)
-    updated_at: datetime = Field(default_factory=_utcnow)
+    created_at: datetime = Field(default_factory=_utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
+    updated_at: datetime = Field(default_factory=_utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
 
     links: list["CompletionLinkTable"] = Relationship(back_populates="order")
 
@@ -147,7 +147,7 @@ class CompletionLinkTable(SQLModel, table=True):
     order_id: UUID = Field(foreign_key="orders.id", index=True)
     url: str
     title: str
-    created_at: datetime = Field(default_factory=_utcnow)
+    created_at: datetime = Field(default_factory=_utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
 
     order: OrderTable | None = Relationship(back_populates="links")
 
@@ -204,4 +204,4 @@ class WebhookDeliveryTable(SQLModel, table=True):
     __tablename__ = "webhook_deliveries"
 
     delivery_id: str = Field(primary_key=True, max_length=128)
-    created_at: datetime = Field(default_factory=_utcnow)
+    created_at: datetime = Field(default_factory=_utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))

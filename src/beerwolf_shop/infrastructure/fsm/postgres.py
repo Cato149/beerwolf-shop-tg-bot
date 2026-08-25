@@ -14,6 +14,7 @@ from aiogram.fsm.storage.base import (
     StorageKey,
 )
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -72,7 +73,14 @@ class PostgresStorage(BaseStorage):
             data="{}",
         )
         session.add(row)
-        await session.flush()
+        try:
+            await session.flush()
+        except IntegrityError:
+            await session.rollback()
+            existing = await self._get_row(session, key)
+            if existing is None:
+                raise
+            return existing
         return row
 
     async def set_state(self, key: StorageKey, state: StateType = None) -> None:
@@ -98,7 +106,10 @@ class PostgresStorage(BaseStorage):
             row = await self._get_row(session, key)
             if row is None or not row.data:
                 return {}
-            loaded = json.loads(row.data)
+            try:
+                loaded = json.loads(row.data)
+            except json.JSONDecodeError:
+                return {}
             return loaded if isinstance(loaded, dict) else {}
 
     async def close(self) -> None:

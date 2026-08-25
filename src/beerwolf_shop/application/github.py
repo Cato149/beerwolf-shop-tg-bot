@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from beerwolf_shop.application.dto import CustomerRequestDTO, LinkGithubDTO, ProgressSnapshot
-from beerwolf_shop.application.orders import require_order
+from beerwolf_shop.application.orders import assert_owner, assert_transition, require_order
 from beerwolf_shop.config import Settings
 from beerwolf_shop.domain.entities import Order
 from beerwolf_shop.domain.enums import OrderStatus
 from beerwolf_shop.domain.exceptions import (
-    AccessDeniedError,
     DuplicateDeliveryError,
     GithubIntegrationError,
     InvalidStatusTransitionError,
@@ -56,8 +55,7 @@ class StartInProgress:
         dto: LinkGithubDTO,
     ) -> tuple[Order, list[GithubMilestone], list[GithubProject]]:
         order = await require_order(self._orders, dto.order_id)
-        if order.status not in {OrderStatus.discussion, OrderStatus.application}:
-            raise InvalidStatusTransitionError(f"{order.status}->in_progress")
+        assert_transition(order, OrderStatus.in_progress)
         owner, repo = parse_repo_url(dto.repo_url)
         github_repo = await self._github.get_repo(owner, repo)
         projects = await self._github.list_repository_projects(owner, repo)
@@ -95,8 +93,7 @@ class BuildProgress:
     ) -> ProgressSnapshot:
         order = await require_order(self._orders, order_id)
         if not is_admin and actor_telegram_id is not None:
-            if order.customer_telegram_id != actor_telegram_id:
-                raise AccessDeniedError("not_owner")
+            assert_owner(order, actor_telegram_id)
         if order.status not in {OrderStatus.in_progress, OrderStatus.completed}:
             raise GithubIntegrationError("progress_unavailable")
         if not order.github_owner or not order.github_repo:
@@ -172,8 +169,7 @@ class CreateCustomerRequest:
 
     async def execute(self, dto: CustomerRequestDTO) -> str:
         order = await require_order(self._orders, dto.order_id)
-        if order.customer_telegram_id != dto.actor_telegram_id:
-            raise AccessDeniedError("not_owner")
+        assert_owner(order, dto.actor_telegram_id)
         if order.status != OrderStatus.in_progress:
             raise InvalidStatusTransitionError("request_requires_in_progress")
         if not order.github_owner or not order.github_repo:
@@ -187,8 +183,8 @@ class CreateCustomerRequest:
             labels=[CUSTOMER_REQUEST_LABEL],
         )
         if order.github_project_id and issue.node_id:
-            item_id = await self._github.add_issue_to_project(order.github_project_id, issue.node_id)
             try:
+                item_id = await self._github.add_issue_to_project(order.github_project_id, issue.node_id)
                 await self._github.set_project_status(
                     order.github_project_id,
                     item_id,
@@ -196,7 +192,7 @@ class CreateCustomerRequest:
                     self._settings.github_status_backlog,
                 )
             except GithubIntegrationError:
-                # Column name is configurable; missing option should not fail the issue create.
+                # Issue already exists; a missing project column or add failure must not hide the URL.
                 pass
         return issue.html_url
 
@@ -227,11 +223,14 @@ class HandleIssueClosed:
         name = repo.get("name") or ""
         if not owner or not name:
             return None
-        if delivery_id and await self._deliveries.seen(delivery_id):
-            raise DuplicateDeliveryError(delivery_id)
+        try:
+            number = int(issue["number"])
+        except (KeyError, TypeError, ValueError):
+            return None
         if delivery_id:
-            await self._deliveries.mark(delivery_id)
-        number = int(issue["number"])
+            claimed = await self._deliveries.claim(delivery_id)
+            if not claimed:
+                raise DuplicateDeliveryError(delivery_id)
         comments = await self._github.list_issue_comments(owner, name, number)
         last_comment = next((body for body in reversed(comments) if body.strip()), None)
         body = last_comment or issue.get("body") or ""

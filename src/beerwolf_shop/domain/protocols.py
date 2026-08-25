@@ -53,6 +53,6 @@ class CompletionLinkRepository(Protocol):
 
 
 class WebhookDeliveryRepository(Protocol):
-    async def seen(self, delivery_id: str) -> bool: ...
-
-    async def mark(self, delivery_id: str) -> None: ...
+    async def claim(self, delivery_id: str) -> bool:
+        """Record `delivery_id`. Return False if it was already processed."""
+        ...

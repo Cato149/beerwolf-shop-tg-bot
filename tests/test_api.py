@@ -122,3 +122,104 @@ def test_github_webhook_closed_issue() -> None:
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
     assert ctx.notifier.closed
+
+
+def test_github_webhook_rejects_unsigned() -> None:
+    client, _settings, _ctx = _client()
+    with client:
+        response = client.post(
+            "/webhooks/github",
+            content=b'{"action":"closed"}',
+            headers={"X-GitHub-Event": "issues", "Content-Type": "application/json"},
+        )
+    assert response.status_code == 401
+
+
+def test_github_webhook_ignores_non_issues_event() -> None:
+    import hashlib
+    import hmac
+
+    client, settings, _ctx = _client()
+    body = b"{}"
+    sig = "sha256=" + hmac.new(settings.github_webhook_secret.encode(), body, hashlib.sha256).hexdigest()
+    with client:
+        response = client.post(
+            "/webhooks/github",
+            content=body,
+            headers={
+                "X-Hub-Signature-256": sig,
+                "X-GitHub-Event": "push",
+                "Content-Type": "application/json",
+            },
+        )
+    assert response.status_code == 200
+    assert response.json()["status"] == "ignored"
+
+
+def test_github_webhook_duplicate_delivery() -> None:
+    import asyncio
+    import hashlib
+    import hmac
+    import json
+
+    client, settings, ctx = _client()
+    payload = {
+        "action": "closed",
+        "issue": {"number": 3, "title": "Ship it", "body": "done", "html_url": "https://github.com/acme/shop/issues/3"},
+        "repository": {"name": "shop", "owner": {"login": "acme"}},
+    }
+    body = json.dumps(payload).encode()
+    sig = "sha256=" + hmac.new(settings.github_webhook_secret.encode(), body, hashlib.sha256).hexdigest()
+
+    async def _seed() -> None:
+        order = await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=5, display_name="A", idea="logo"))
+        order.github_owner = "acme"
+        order.github_repo = "shop"
+        order.status = OrderStatus.in_progress
+        await ctx.orders.save(order)
+
+    asyncio.run(_seed())
+    headers = {
+        "X-Hub-Signature-256": sig,
+        "X-GitHub-Event": "issues",
+        "X-GitHub-Delivery": "del-dup",
+        "Content-Type": "application/json",
+    }
+    with client:
+        first = client.post("/webhooks/github", content=body, headers=headers)
+        second = client.post("/webhooks/github", content=body, headers=headers)
+    assert first.status_code == 200
+    assert first.json()["status"] == "ok"
+    assert second.status_code == 200
+    assert second.json()["status"] == "duplicate"
+    assert len(ctx.notifier.closed) == 1
+
+
+def test_customer_cannot_read_foreign_order() -> None:
+    import asyncio
+
+    client, settings, ctx = _client()
+    order = asyncio.run(ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=5, display_name="A", idea="logo")))
+    token = create_access_token(settings, 99)
+    with client:
+        response = client.get(f"/api/v1/orders/{order.id}", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 403
+    assert response.json()["detail"] == "forbidden"
+
+
+def test_admin_in_progress_from_application_is_conflict() -> None:
+    import asyncio
+
+    client, _settings, ctx = _client()
+    order = asyncio.run(ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=5, display_name="A", idea="logo")))
+    with client:
+        response = client.post(
+            f"/api/v1/admin/orders/{order.id}/status",
+            headers={"Authorization": "Bearer admin-secret"},
+            json={
+                "status": "in_progress",
+                "github_repo_url": "https://github.com/acme/shop",
+                "project_display_name": "Shop",
+            },
+        )
+    assert response.status_code == 409

@@ -33,6 +33,17 @@ def test_init_data_bad_hash() -> None:
         validate_telegram_init_data("auth_date=1&hash=dead&user={}", "123:test")
 
 
+def test_init_data_missing_auth_date() -> None:
+    token = "123:test"
+    user = json.dumps({"id": 1, "first_name": "A"}, separators=(",", ":"))
+    pairs = {"query_id": "AA", "user": user}
+    data_check = "\n".join(f"{key}={value}" for key, value in sorted(pairs.items()))
+    secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+    digest = hmac.new(secret, data_check.encode(), hashlib.sha256).hexdigest()
+    with pytest.raises(AuthError, match="missing_auth_date"):
+        validate_telegram_init_data(urlencode({**pairs, "hash": digest}), token)
+
+
 def test_jwt_roundtrip() -> None:
     settings = make_test_settings()
     token = create_access_token(settings, 42)

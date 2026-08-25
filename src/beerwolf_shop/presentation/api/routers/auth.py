@@ -30,9 +30,9 @@ async def auth_telegram(
 ) -> TokenResponse:
     try:
         tg_user = validate_telegram_init_data(body.init_data, settings.bot_token)
-    except AuthError as exc:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
-    telegram_id = int(tg_user["id"])
+        telegram_id = int(tg_user["id"])
+    except (AuthError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid_init_data") from exc
     user = await ctx.upsert_user.execute(
         telegram_id,
         tg_user.get("username"),

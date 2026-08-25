@@ -2,7 +2,7 @@ import pytest
 
 from beerwolf_shop.application.dto import CompleteOrderDTO, LinkGithubDTO, SubmitOrderDTO
 from beerwolf_shop.domain.enums import OrderStatus, OrderType
-from beerwolf_shop.domain.exceptions import InvalidStatusTransitionError
+from beerwolf_shop.domain.exceptions import GithubIntegrationError, InvalidStatusTransitionError
 
 from tests.fakes import FakeContext
 
@@ -72,3 +72,34 @@ async def test_support_ticket_links_parent() -> None:
     assert ticket.type == OrderType.support
     assert ticket.parent_order_id == parent.id
     assert stored_parent.id == parent.id
+
+
+@pytest.mark.asyncio
+async def test_in_progress_requires_discussion() -> None:
+    ctx = FakeContext()
+    order = await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=1, display_name="A", idea="logo"))
+    with pytest.raises(InvalidStatusTransitionError):
+        await ctx.start_in_progress.execute(
+            LinkGithubDTO(
+                order_id=order.id,
+                repo_url="https://github.com/acme/shop",
+                project_display_name="Shop",
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_customer_request_survives_project_add_failure() -> None:
+    from beerwolf_shop.application.dto import CustomerRequestDTO
+
+    ctx = FakeContext()
+    order = await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=5, display_name="A", idea="ui"))
+    await ctx.start_discussion.execute(order.id)
+    linked, _ms, _projects = await ctx.start_in_progress.execute(
+        LinkGithubDTO(order_id=order.id, repo_url="https://github.com/acme/shop", project_display_name="Shop")
+    )
+    ctx.github.add_project_error = GithubIntegrationError("github_project_add_failed")
+    url = await ctx.create_request.execute(
+        CustomerRequestDTO(order_id=linked.id, title="Bigger ears", body="pls", actor_telegram_id=5)
+    )
+    assert url.endswith("/issues/1")

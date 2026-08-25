@@ -36,6 +36,12 @@ def assert_owner(order: Order, telegram_id: int) -> None:
         raise AccessDeniedError("not_owner")
 
 
+def assert_transition(order: Order, new_status: OrderStatus) -> None:
+    allowed = ALLOWED_TRANSITIONS.get(order.status, set())
+    if new_status not in allowed:
+        raise InvalidStatusTransitionError(f"{order.status}->{new_status}")
+
+
 class SubmitOrder:
     def __init__(self, users: UserRepository, orders: OrderRepository) -> None:
         self._users = users
@@ -55,6 +61,8 @@ class SubmitOrder:
             user.display_name = dto.display_name
             if dto.username:
                 user.username = dto.username
+            if dto.language:
+                user.language = dto.language
             await self._users.save(user)
         order = Order(
             customer_telegram_id=dto.customer_telegram_id,
@@ -142,9 +150,7 @@ class ChangeStatus:
 
     async def execute(self, order_id: UUID, new_status: OrderStatus) -> Order:
         order = await require_order(self._orders, order_id)
-        allowed = ALLOWED_TRANSITIONS.get(order.status, set())
-        if new_status not in allowed:
-            raise InvalidStatusTransitionError(f"{order.status}->{new_status}")
+        assert_transition(order, new_status)
         order.status = new_status
         order.touch()
         return await self._orders.save(order)
@@ -173,8 +179,7 @@ class CompleteOrder:
 
     async def execute(self, dto: CompleteOrderDTO) -> Order:
         order = await require_order(self._orders, dto.order_id)
-        if order.status != OrderStatus.in_progress:
-            raise InvalidStatusTransitionError(f"{order.status}->completed")
+        assert_transition(order, OrderStatus.completed)
         order.status = OrderStatus.completed
         order.completion_message = dto.message
         order.touch()

@@ -73,13 +73,10 @@ class TelegramNotifier:
         html_text: str,
         photos: Sequence[tuple[str, str]],
     ) -> None:
-        try:
-            if html_text:
-                await self._bot.send_message(telegram_id, html_text, parse_mode=ParseMode.HTML)
-            for url, caption in photos:
-                await self._bot.send_photo(telegram_id, url, caption=caption[:1024] or None)
-        except TelegramAPIError:
-            logger.info("Could not deliver media to %s", telegram_id)
+        if html_text:
+            await self._bot.send_message(telegram_id, html_text, parse_mode=ParseMode.HTML)
+        for url, caption in photos:
+            await self._bot.send_photo(telegram_id, url, caption=caption[:1024] or None)
 
     async def send_closed_issue(
         self,
@@ -92,6 +89,7 @@ class TelegramNotifier:
         header = render_md(self._i18n, locale, "progress.issue_closed", title=title, url=url)
         try:
             await self._bot.send_message(telegram_id, header, parse_mode=ParseMode.MARKDOWN_V2)
+            await self.send_html_with_photos(telegram_id, rendered.html, rendered.photos)
         except TelegramAPIError:
-            logger.info("Could not deliver issue header to %s", telegram_id)
-        await self.send_html_with_photos(telegram_id, rendered.html, rendered.photos)
+            logger.warning("Could not deliver closed-issue notification to %s", telegram_id)
+            raise

@@ -19,12 +19,14 @@ from beerwolf_shop.infrastructure.telegram.keyboards import (
     render_md,
     wizard_menu,
 )
+from beerwolf_shop.infrastructure.telegram.markdown import escape_markdown_v2
 from beerwolf_shop.presentation.telegram.context import AppContext
 from beerwolf_shop.presentation.telegram.formatters import (
     customer_order_card,
     progress_message,
     status_label,
 )
+from beerwolf_shop.presentation.telegram.handlers.common import reply_error, require_text
 from beerwolf_shop.presentation.telegram.states import CustomerRequestWizard, SupportWizard
 
 router = Router(name="customer")
@@ -70,12 +72,12 @@ async def my_orders(message: Message, ctx: AppContext, user: User, locale: str) 
 async def view_order(
     query: CallbackQuery, callback_data: OrderViewCb, ctx: AppContext, user: User, locale: str
 ) -> None:
-    await query.answer()
     try:
         order = await ctx.get_order.execute(UUID(callback_data.order_id), actor_telegram_id=user.telegram_id)
     except DomainError:
         await query.answer(ctx.i18n.get(locale, "common.error_generic"), show_alert=True)
         return
+    await query.answer()
     text = customer_order_card(ctx.i18n, locale, order)
     if order.status in {OrderStatus.application, OrderStatus.discussion}:
         text = render_md(
@@ -130,7 +132,10 @@ async def start_request(query: CallbackQuery, locale: str, state: FSMContext, ct
 
 @router.message(CustomerRequestWizard.title)
 async def request_title(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
-    await state.update_data(title=(message.text or "").strip())
+    title = await require_text(message, ctx, locale)
+    if title is None:
+        return
+    await state.update_data(title=title)
     await state.set_state(CustomerRequestWizard.body)
     await message.answer(
         render_md(ctx.i18n, locale, "customer.ask_request_body"),
@@ -149,17 +154,20 @@ async def request_body(
     state: FSMContext,
 ) -> None:
     data = await state.get_data()
+    body = await require_text(message, ctx, locale)
+    if body is None:
+        return
     try:
         url = await ctx.create_request.execute(
             CustomerRequestDTO(
                 order_id=UUID(data["order_id"]),
                 title=data["title"],
-                body=message.text or "",
+                body=body,
                 actor_telegram_id=user.telegram_id,
             )
         )
     except DomainError:
-        await message.answer(render_md(ctx.i18n, locale, "common.error_generic"), parse_mode="MarkdownV2")
+        await reply_error(message, ctx, locale)
         await state.clear()
         return
     await state.clear()
@@ -172,9 +180,13 @@ async def request_body(
 
 @router.callback_query(F.data.startswith("cust:links:"))
 async def show_links(query: CallbackQuery, ctx: AppContext, user: User, locale: str) -> None:
-    await query.answer()
     order_id = UUID(query.data.split(":", 2)[2])
-    order = await ctx.get_order.execute(order_id, actor_telegram_id=user.telegram_id)
+    try:
+        order = await ctx.get_order.execute(order_id, actor_telegram_id=user.telegram_id)
+    except DomainError:
+        await query.answer(ctx.i18n.get(locale, "common.error_generic"), show_alert=True)
+        return
+    await query.answer()
     if not order.links:
         text = render_md(ctx.i18n, locale, "customer.no_links")
     else:
@@ -182,7 +194,7 @@ async def show_links(query: CallbackQuery, ctx: AppContext, user: User, locale: 
         for link in order.links:
             lines.append(render_md(ctx.i18n, locale, "customer.links_item", title=link.title, url=link.url))
         if order.completion_message:
-            lines.append(order.completion_message)
+            lines.append(escape_markdown_v2(order.completion_message))
         text = "\n".join(lines)
     if query.message:
         await query.message.answer(
@@ -207,7 +219,10 @@ async def start_support(query: CallbackQuery, locale: str, state: FSMContext, ct
 
 @router.message(SupportWizard.idea)
 async def support_idea(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
-    await state.update_data(idea=(message.text or "").strip())
+    idea = await require_text(message, ctx, locale)
+    if idea is None:
+        return
+    await state.update_data(idea=idea)
     await state.set_state(SupportWizard.contacts)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_contacts"),
@@ -269,14 +284,18 @@ async def support_confirm(
     state: FSMContext,
 ) -> None:
     data = await state.get_data()
-    ticket, parent = await ctx.create_support.execute(
-        parent_order_id=UUID(data["parent_order_id"]),
-        actor_telegram_id=user.telegram_id,
-        idea=data["idea"],
-        extra_contacts=data.get("contacts"),
-        references=data.get("references"),
-        budget=data.get("budget"),
-    )
+    try:
+        ticket, parent = await ctx.create_support.execute(
+            parent_order_id=UUID(data["parent_order_id"]),
+            actor_telegram_id=user.telegram_id,
+            idea=data["idea"],
+            extra_contacts=data.get("contacts"),
+            references=data.get("references"),
+            budget=data.get("budget"),
+        )
+    except DomainError:
+        await reply_error(message, ctx, locale)
+        return
     await ctx.notifier.notify_admins_new_order(ticket, user, locale=ctx.settings.default_locale)
     await state.clear()
     _ = parent

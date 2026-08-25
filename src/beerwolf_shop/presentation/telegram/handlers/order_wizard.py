@@ -6,6 +6,7 @@ from aiogram.types import Message
 
 from beerwolf_shop.application.dto import SubmitOrderDTO
 from beerwolf_shop.domain.entities import User
+from beerwolf_shop.domain.exceptions import DomainError
 from beerwolf_shop.infrastructure.telegram.keyboards import (
     confirm_menu,
     main_menu,
@@ -13,6 +14,7 @@ from beerwolf_shop.infrastructure.telegram.keyboards import (
     wizard_menu,
 )
 from beerwolf_shop.presentation.telegram.context import AppContext
+from beerwolf_shop.presentation.telegram.handlers.common import reply_error, require_text
 from beerwolf_shop.presentation.telegram.states import OrderWizard
 
 router = Router(name="order_wizard")
@@ -40,7 +42,10 @@ async def start_wizard(message: Message, ctx: AppContext, locale: str, state: FS
 
 @router.message(OrderWizard.name)
 async def got_name(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
-    await state.update_data(display_name=(message.text or "").strip())
+    name = await require_text(message, ctx, locale)
+    if name is None:
+        return
+    await state.update_data(display_name=name)
     await state.set_state(OrderWizard.idea)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_idea"),
@@ -51,7 +56,10 @@ async def got_name(message: Message, locale: str, state: FSMContext, ctx: AppCon
 
 @router.message(OrderWizard.idea)
 async def got_idea(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
-    await state.update_data(idea=(message.text or "").strip())
+    idea = await require_text(message, ctx, locale)
+    if idea is None:
+        return
+    await state.update_data(idea=idea)
     await state.set_state(OrderWizard.contacts)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_contacts"),
@@ -113,20 +121,24 @@ async def confirm_order(
     state: FSMContext,
 ) -> None:
     data = await state.get_data()
-    order = await ctx.submit_order.execute(
-        SubmitOrderDTO(
-            customer_telegram_id=user.telegram_id,
-            display_name=data["display_name"],
-            idea=data["idea"],
-            extra_contacts=data.get("contacts"),
-            references=data.get("references"),
-            budget=data.get("budget"),
-            username=user.username,
-            language=locale,
-        )
-    )
-    await ctx.notifier.notify_admins_new_order(order, user, locale=ctx.settings.default_locale)
     await state.clear()
+    try:
+        order = await ctx.submit_order.execute(
+            SubmitOrderDTO(
+                customer_telegram_id=user.telegram_id,
+                display_name=data["display_name"],
+                idea=data["idea"],
+                extra_contacts=data.get("contacts"),
+                references=data.get("references"),
+                budget=data.get("budget"),
+                username=user.username,
+                language=locale,
+            )
+        )
+    except DomainError:
+        await reply_error(message, ctx, locale)
+        return
+    await ctx.notifier.notify_admins_new_order(order, user, locale=ctx.settings.default_locale)
     await message.answer(
         render_md(ctx.i18n, locale, "order.submitted"),
         parse_mode="MarkdownV2",

@@ -31,9 +31,15 @@ def validate_telegram_init_data(init_data: str, bot_token: str, *, max_age_secon
     computed = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(computed, received_hash):
         raise AuthError("invalid_hash")
-    auth_date = int(pairs.get("auth_date") or 0)
-    if auth_date and time.time() - auth_date > max_age_seconds:
+    try:
+        auth_date = int(pairs["auth_date"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise AuthError("missing_auth_date") from exc
+    now = time.time()
+    if now - auth_date > max_age_seconds:
         raise AuthError("expired")
+    if auth_date > now + 60:
+        raise AuthError("invalid_auth_date")
     user_raw = pairs.get("user")
     if not user_raw:
         raise AuthError("missing_user")
@@ -41,6 +47,8 @@ def validate_telegram_init_data(init_data: str, bot_token: str, *, max_age_secon
         user = json.loads(unquote(user_raw))
     except json.JSONDecodeError as exc:
         raise AuthError("invalid_user") from exc
+    if "id" not in user:
+        raise AuthError("invalid_user")
     return user
 
 

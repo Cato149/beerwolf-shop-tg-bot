@@ -16,6 +16,7 @@ from beerwolf_shop.infrastructure.db.session import create_session_factory
 from beerwolf_shop.infrastructure.github.client import GithubClient
 from beerwolf_shop.infrastructure.telegram.i18n import I18n
 from beerwolf_shop.infrastructure.telegram.notifier import TelegramNotifier
+from beerwolf_shop.presentation.api.errors import domain_error_response
 from beerwolf_shop.presentation.api.routers import admin, auth, health, me, orders, webhooks
 from beerwolf_shop.presentation.telegram.bot import create_bot, create_dispatcher
 
@@ -52,24 +53,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.notifier = notifier
 
         polling_task: asyncio.Task[None] | None = None
-        if settings.bot_token and settings.bot_mode == BotMode.webhook:
-            url = settings.telegram_webhook_url()
-            if url:
-                await bot.set_webhook(url, secret_token=settings.telegram_webhook_secret or None)
-        elif settings.bot_token and settings.bot_mode == BotMode.polling:
-            await bot.delete_webhook(drop_pending_updates=False)
-            polling_task = asyncio.create_task(dispatcher.start_polling(bot))
+        try:
+            if settings.bot_token and settings.bot_mode == BotMode.webhook:
+                url = settings.telegram_webhook_url()
+                if url:
+                    await bot.set_webhook(url, secret_token=settings.telegram_webhook_secret or None)
+            elif settings.bot_token and settings.bot_mode == BotMode.polling:
+                await bot.delete_webhook(drop_pending_updates=False)
+                polling_task = asyncio.create_task(dispatcher.start_polling(bot))
 
-        yield
-
-        if polling_task:
-            polling_task.cancel()
-            try:
-                await polling_task
-            except asyncio.CancelledError:
-                pass
-        await github.aclose()
-        await bot.session.close()
+            yield
+        finally:
+            if polling_task:
+                polling_task.cancel()
+                try:
+                    await polling_task
+                except asyncio.CancelledError:
+                    pass
+            await github.aclose()
+            await bot.session.close()
 
     app = FastAPI(
         title="Beerwolf commission shop",
@@ -84,7 +86,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(DomainError)
     async def domain_error_handler(_request, exc: DomainError) -> JSONResponse:
-        return JSONResponse(status_code=400, content={"detail": str(exc) or exc.__class__.__name__})
+        status_code, detail = domain_error_response(exc)
+        return JSONResponse(status_code=status_code, content={"detail": detail})
 
     app.include_router(health.router)
     app.include_router(auth.router)

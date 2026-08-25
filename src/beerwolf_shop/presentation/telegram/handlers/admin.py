@@ -13,6 +13,7 @@ from aiogram.types import CallbackQuery, Message
 from beerwolf_shop.application.dto import CompleteOrderDTO, LinkGithubDTO, ManualOrderDTO
 from beerwolf_shop.domain.enums import OrderStatus, OrderType
 from beerwolf_shop.domain.exceptions import DomainError, GithubIntegrationError
+from beerwolf_shop.infrastructure.github.client import parse_repo_url
 from beerwolf_shop.infrastructure.telegram.keyboards import (
     STATUS_FILTERS,
     AdminListCb,
@@ -33,6 +34,7 @@ from beerwolf_shop.presentation.telegram.formatters import (
     admin_order_card,
     list_title,
 )
+from beerwolf_shop.presentation.telegram.handlers.common import reply_error, require_text
 from beerwolf_shop.presentation.telegram.states import (
     AdminComplete,
     AdminLinkGithub,
@@ -168,7 +170,13 @@ async def view_order(
         return
     await query.answer()
     if query.message:
-        await _show_admin_card(query.message, ctx, locale, UUID(callback_data.order_id))
+        try:
+            await _show_admin_card(query.message, ctx, locale, UUID(callback_data.order_id))
+        except DomainError:
+            await query.message.answer(
+                render_md(ctx.i18n, locale, "common.error_generic"),
+                parse_mode="MarkdownV2",
+            )
 
 
 @router.callback_query(AdminOrderCb.filter(F.action == "spam"))
@@ -177,7 +185,11 @@ async def mark_spam(
 ) -> None:
     if not await _require_admin(query, is_admin):
         return
-    await ctx.mark_spam.execute(UUID(callback_data.order_id))
+    try:
+        await ctx.mark_spam.execute(UUID(callback_data.order_id))
+    except DomainError:
+        await query.answer(ctx.i18n.get(locale, "common.error_generic"), show_alert=True)
+        return
     await query.answer()
     if query.message:
         await query.message.answer(render_md(ctx.i18n, locale, "admin.spam_marked"), parse_mode="MarkdownV2")
@@ -193,7 +205,11 @@ async def start_discussion(
 ) -> None:
     if not await _require_admin(query, is_admin):
         return
-    order = await ctx.start_discussion.execute(UUID(callback_data.order_id))
+    try:
+        order = await ctx.start_discussion.execute(UUID(callback_data.order_id))
+    except DomainError:
+        await query.answer(ctx.i18n.get(locale, "common.error_generic"), show_alert=True)
+        return
     customer = await ctx.users.get_by_telegram_id(order.customer_telegram_id)
     customer_locale = customer.language if customer else ctx.settings.default_locale
     await ctx.notifier.notify_customer(
@@ -231,7 +247,15 @@ async def start_in_progress(
 
 @router.message(AdminLinkGithub.repo_url)
 async def got_repo(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
-    await state.update_data(repo_url=(message.text or "").strip())
+    raw = await require_text(message, ctx, locale)
+    if raw is None:
+        return
+    try:
+        parse_repo_url(raw)
+    except GithubIntegrationError:
+        await message.answer(render_md(ctx.i18n, locale, "admin.repo_fail"), parse_mode="MarkdownV2")
+        return
+    await state.update_data(repo_url=raw)
     await state.set_state(AdminLinkGithub.project_name)
     await message.answer(
         render_md(ctx.i18n, locale, "admin.ask_project_name"),
@@ -260,6 +284,9 @@ async def _finish_link(
         )
     except GithubIntegrationError:
         await message.answer(render_md(ctx.i18n, locale, "admin.repo_fail"), parse_mode="MarkdownV2")
+        return
+    except DomainError:
+        await reply_error(message, ctx, locale)
         return
     if project_id is None and len(projects) > 1:
         await state.update_data(projects=[{"id": p.id, "title": p.title} for p in projects])
@@ -308,7 +335,10 @@ async def got_project_name(
     is_admin: bool,
     state: FSMContext,
 ) -> None:
-    await state.update_data(project_display_name=(message.text or "").strip())
+    text = await require_text(message, ctx, locale)
+    if text is None:
+        return
+    await state.update_data(project_display_name=text)
     await _finish_link(message, ctx, locale, is_admin, state, project_id=None)
 
 
@@ -325,7 +355,11 @@ async def pick_project(
         return
     data = await state.get_data()
     projects = data.get("projects") or []
-    chosen = projects[callback_data.idx]
+    try:
+        chosen = projects[callback_data.idx]
+    except (IndexError, TypeError, KeyError):
+        await query.answer(ctx.i18n.get(locale, "common.error_generic"), show_alert=True)
+        return
     await query.answer()
     if query.message:
         await _finish_link(query.message, ctx, locale, is_admin, state, project_id=chosen["id"])
@@ -390,9 +424,13 @@ async def got_complete_message(
 ) -> None:
     data = await state.get_data()
     extra = _blank(message.text)
-    order = await ctx.complete_order.execute(
-        CompleteOrderDTO(order_id=UUID(data["order_id"]), links=data.get("links") or [], message=extra)
-    )
+    try:
+        order = await ctx.complete_order.execute(
+            CompleteOrderDTO(order_id=UUID(data["order_id"]), links=data.get("links") or [], message=extra)
+        )
+    except DomainError:
+        await reply_error(message, ctx, locale)
+        return
     customer = await ctx.users.get_by_telegram_id(order.customer_telegram_id)
     customer_locale = customer.language if customer else ctx.settings.default_locale
     await ctx.notifier.notify_customer(
@@ -535,8 +573,7 @@ async def manual_confirm(
             )
         )
     except DomainError:
-        await message.answer(render_md(ctx.i18n, locale, "common.error_generic"), parse_mode="MarkdownV2")
-        await state.clear()
+        await reply_error(message, ctx, locale)
         return
     customer = await ctx.users.get_by_telegram_id(order.customer_telegram_id)
     await ctx.notifier.notify_admins_new_order(order, customer, locale=locale)

@@ -67,3 +67,17 @@ async def test_progress_and_customer_request() -> None:
     )
     assert url.endswith("/issues/1")
     assert "customer request" in ctx.github.labels
+
+
+@pytest.mark.asyncio
+async def test_graphql_network_error_is_domain_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("offline", request=request)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport, base_url="https://api.github.com") as http:
+        client = GithubClient("token", client=http)
+        from beerwolf_shop.domain.exceptions import GithubIntegrationError
+
+        with pytest.raises(GithubIntegrationError, match="github_unreachable"):
+            await client.list_repository_projects("acme", "shop")

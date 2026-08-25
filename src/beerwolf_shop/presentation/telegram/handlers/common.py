@@ -17,6 +17,24 @@ from beerwolf_shop.presentation.telegram.context import AppContext
 router = Router(name="common")
 
 
+async def reply_error(message: Message, ctx: AppContext, locale: str) -> None:
+    await message.answer(
+        render_md(ctx.i18n, locale, "common.error_generic"),
+        parse_mode="MarkdownV2",
+    )
+
+
+async def require_text(message: Message, ctx: AppContext, locale: str) -> str | None:
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer(
+            render_md(ctx.i18n, locale, "common.error_empty"),
+            parse_mode="MarkdownV2",
+        )
+        return None
+    return text
+
+
 @router.message(CommandStart())
 async def cmd_start(
     message: Message, ctx: AppContext, user: User, locale: str, is_admin: bool, state: FSMContext
