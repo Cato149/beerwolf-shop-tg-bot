@@ -6,7 +6,8 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import BaseMiddleware
-from aiogram.types import CallbackQuery, Message, TelegramObject, User as TgUser
+from aiogram.types import CallbackQuery, Message, TelegramObject
+from aiogram.types import User as TgUser
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
 
