@@ -130,7 +130,9 @@ class GetOrder:
 
     async def execute(self, order_id: UUID, *, actor_telegram_id: int | None = None, is_admin: bool = False) -> Order:
         order = await require_order(self._orders, order_id)
-        if not is_admin and actor_telegram_id is not None:
+        if not is_admin:
+            if actor_telegram_id is None:
+                raise AccessDeniedError("not_owner")
             assert_owner(order, actor_telegram_id)
         order.links = await self._links.list_for_order(order.id)
         return order

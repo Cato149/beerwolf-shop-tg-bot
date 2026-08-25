@@ -4,6 +4,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 
 from beerwolf_shop.application.dto import CompleteOrderDTO, LinkGithubDTO, ManualOrderDTO
 from beerwolf_shop.domain.enums import OrderStatus, OrderType
@@ -121,7 +122,7 @@ async def change_status(
     if body.status == OrderStatus.in_progress:
         if not body.github_repo_url or not body.project_display_name:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "github_fields_required")
-        order, _milestones, projects = await ctx.start_in_progress.execute(
+        order, milestones, projects = await ctx.start_in_progress.execute(
             LinkGithubDTO(
                 order_id=order_id,
                 repo_url=body.github_repo_url,
@@ -129,11 +130,17 @@ async def change_status(
                 project_id=body.github_project_id,
             )
         )
-        if body.github_project_id is None and len(projects) > 1 and not order.github_project_id:
-            return ProjectChoiceResponse(
-                detail="multiple_projects",
-                projects=[ProjectOption(id=item.id, title=item.title) for item in projects],
+        if order.status != OrderStatus.in_progress:
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content=ProjectChoiceResponse(
+                    detail="multiple_projects",
+                    projects=[ProjectOption(id=item.id, title=item.title) for item in projects],
+                ).model_dump(),
             )
+        milestone_text = "\n".join(
+            f"• {item.title}" + (f" ({item.due_on[:10]})" if item.due_on else "") for item in milestones
+        )
         customer = await ctx.users.get_by_telegram_id(order.customer_telegram_id)
         locale = customer.language if customer else ctx.settings.default_locale
         await ctx.notifier.notify_customer(
@@ -142,7 +149,7 @@ async def change_status(
             "order.in_progress_started",
             project=order.project_display_name or "",
             repo=order.github_repo_url or "",
-            milestones="",
+            milestones=milestone_text,
         )
         return to_order_out(order)
     if body.status == OrderStatus.completed:

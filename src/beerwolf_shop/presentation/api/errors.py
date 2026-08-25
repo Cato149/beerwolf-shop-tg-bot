@@ -17,6 +17,7 @@ _GITHUB_CLIENT_ERRORS = frozenset(
         "invalid_repo_url",
         "progress_unavailable",
         "repo_not_linked",
+        "github_project_unknown",
         "github_status_option_missing",
         "github_project_add_failed",
     }

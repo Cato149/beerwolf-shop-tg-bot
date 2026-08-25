@@ -2,9 +2,10 @@
 
 from enum import StrEnum
 from functools import lru_cache
+from typing import Annotated
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class BotMode(StrEnum):
@@ -40,7 +41,7 @@ class Settings(BaseSettings):
         default="",
         description="Secret Telegram sends in X-Telegram-Bot-Api-Secret-Token for webhook mode.",
     )
-    admin_telegram_ids: list[int] = Field(
+    admin_telegram_ids: Annotated[list[int], NoDecode] = Field(
         default_factory=list,
         description="Comma-separated Telegram user IDs that have admin privileges.",
     )

@@ -9,7 +9,7 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
-from beerwolf_shop.domain.enums import OrderStatus
+from beerwolf_shop.domain.enums import OrderStatus, OrderType
 from beerwolf_shop.infrastructure.telegram.i18n import I18n
 from beerwolf_shop.infrastructure.telegram.markdown import render_locale
 
@@ -22,6 +22,7 @@ class AdminOrderCb(CallbackData, prefix="aord"):
 class AdminListCb(CallbackData, prefix="alist"):
     status: str
     page: int
+    kind: str = "all"
 
 
 class LangCb(CallbackData, prefix="lang"):
@@ -147,6 +148,7 @@ def admin_list_keyboard(
     page: int,
     has_next: bool,
     orders: list[tuple[UUID, str]],
+    kind: str = "all",
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for order_id, title in orders:
@@ -155,13 +157,13 @@ def admin_list_keyboard(
         marker = "• " if key == current else ""
         builder.button(
             text=f"{marker}{_label(i18n, locale, f'admin.filter_{key}')}",
-            callback_data=AdminListCb(status=key, page=0),
+            callback_data=AdminListCb(status=key, page=0, kind=kind),
         )
     nav = []
     if page > 0:
-        nav.append(("common.btn_prev", AdminListCb(status=current, page=page - 1)))
+        nav.append(("common.btn_prev", AdminListCb(status=current, page=page - 1, kind=kind)))
     if has_next:
-        nav.append(("common.btn_next", AdminListCb(status=current, page=page + 1)))
+        nav.append(("common.btn_next", AdminListCb(status=current, page=page + 1, kind=kind)))
     for key, cb in nav:
         builder.button(text=_label(i18n, locale, key), callback_data=cb)
     builder.button(text=_label(i18n, locale, "admin.btn_create"), callback_data="admin:create")
@@ -193,6 +195,7 @@ def customer_order_actions(
     order_id: UUID,
     status: OrderStatus,
     *,
+    order_type: OrderType = OrderType.commission,
     bot_username: str,
     share_text: str,
 ) -> InlineKeyboardMarkup:
@@ -208,7 +211,8 @@ def customer_order_actions(
             builder.button(text=_label(i18n, locale, "customer.btn_share"), url=url)
     if status == OrderStatus.completed:
         builder.button(text=_label(i18n, locale, "customer.btn_links"), callback_data=f"cust:links:{oid}")
-        builder.button(text=_label(i18n, locale, "customer.btn_support"), callback_data=f"cust:sup:{oid}")
+        if order_type == OrderType.commission:
+            builder.button(text=_label(i18n, locale, "customer.btn_support"), callback_data=f"cust:sup:{oid}")
     builder.adjust(1)
     return builder.as_markup()
 

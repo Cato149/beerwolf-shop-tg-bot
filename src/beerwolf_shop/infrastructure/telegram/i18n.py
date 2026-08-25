@@ -35,6 +35,15 @@ class I18n:
                 logger.warning("locale file missing: %s", path)
             self._catalogs[locale] = parser
 
+    def values_for(self, key: str) -> frozenset[str]:
+        """All locale strings for a key. Used to match reply-keyboard labels."""
+        return frozenset(self.get(locale, key) for locale in SUPPORTED_LOCALES)
+
+    def matches(self, text: str | None, key: str) -> bool:
+        if not text:
+            return False
+        return text.strip() in self.values_for(key)
+
     def get(self, locale: str, key: str, **kwargs: object) -> str:
         section, _, option = key.partition(".")
         text = self._lookup(locale, section, option)

@@ -54,10 +54,13 @@ def gfm_to_telegram(markdown: str, *, fallback_caption: str = "") -> RenderedMar
 
     text = _INLINE_CODE.sub(stash_code, text)
 
-    def heading(match: re.Match[str]) -> str:
-        return f"<b>{html.escape(match.group(2))}</b>"
+    headings: list[str] = []
 
-    text = _HEADING.sub(heading, text)
+    def stash_heading(match: re.Match[str]) -> str:
+        headings.append(f"<b>{html.escape(match.group(2))}</b>")
+        return f"\x00H{len(headings) - 1}\x00"
+
+    text = _HEADING.sub(stash_heading, text)
 
     # Escape raw HTML first, then restore protected spans and wrap markup.
     escaped = html.escape(text)
@@ -67,6 +70,8 @@ def gfm_to_telegram(markdown: str, *, fallback_caption: str = "") -> RenderedMar
         escaped = escaped.replace(f"\x00C{index}\x00", chunk)
     for index, chunk in enumerate(blocks):
         escaped = escaped.replace(f"\x00B{index}\x00", chunk)
+    for index, chunk in enumerate(headings):
+        escaped = escaped.replace(f"\x00H{index}\x00", chunk)
 
     def repl_link(match: re.Match[str]) -> str:
         label = match.group(1)

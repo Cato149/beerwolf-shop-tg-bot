@@ -8,7 +8,7 @@ from aiogram.types import CallbackQuery, Message
 
 from beerwolf_shop.application.dto import CustomerRequestDTO
 from beerwolf_shop.domain.entities import User
-from beerwolf_shop.domain.enums import OrderStatus
+from beerwolf_shop.domain.enums import OrderStatus, OrderType
 from beerwolf_shop.domain.exceptions import DomainError
 from beerwolf_shop.infrastructure.telegram.keyboards import (
     OrderViewCb,
@@ -26,34 +26,31 @@ from beerwolf_shop.presentation.telegram.formatters import (
     progress_message,
     status_label,
 )
-from beerwolf_shop.presentation.telegram.handlers.common import reply_error, require_text
+from beerwolf_shop.presentation.telegram.handlers.common import LocaleText, reply_error, require_text
 from beerwolf_shop.presentation.telegram.states import CustomerRequestWizard, SupportWizard
 
 router = Router(name="customer")
 
-SKIP = {"Пропустить", "Skip"}
-CONFIRM = {"Подтвердить", "Confirm"}
-MY_ORDERS = {"Мои заявки", "My requests"}
 
-
-def _blank(value: str | None) -> str | None:
-    if value is None or value.strip() in SKIP or not value.strip():
+def _blank(i18n, value: str | None) -> str | None:
+    if value is None or not value.strip() or i18n.matches(value, "common.btn_skip"):
         return None
     return value.strip()
 
 
-def _actions(ctx: AppContext, locale: str, order_id: UUID, status: OrderStatus):
+def _actions(ctx: AppContext, locale: str, order_id: UUID, status: OrderStatus, order_type: OrderType):
     return customer_order_actions(
         ctx.i18n,
         locale,
         order_id,
         status,
+        order_type=order_type,
         bot_username=ctx.settings.bot_username,
         share_text=ctx.i18n.get(locale, "customer.share_text"),
     )
 
 
-@router.message(F.text.in_(MY_ORDERS))
+@router.message(LocaleText("common.btn_my_orders"))
 async def my_orders(message: Message, ctx: AppContext, user: User, locale: str) -> None:
     orders = await ctx.list_customer_orders.execute(user.telegram_id)
     visible = [order for order in orders if order.status != OrderStatus.spam]
@@ -90,7 +87,7 @@ async def view_order(
         await query.message.answer(
             text,
             parse_mode="MarkdownV2",
-            reply_markup=_actions(ctx, locale, order.id, order.status),
+            reply_markup=_actions(ctx, locale, order.id, order.status, order.type),
         )
 
 
@@ -112,7 +109,7 @@ async def show_progress(query: CallbackQuery, ctx: AppContext, user: User, local
         await query.message.answer(
             progress_message(ctx.i18n, locale, order.project_display_name or order.github_repo or "", snapshot),
             parse_mode="MarkdownV2",
-            reply_markup=_actions(ctx, locale, order.id, order.status),
+            reply_markup=_actions(ctx, locale, order.id, order.status, order.type),
         )
 
 
@@ -200,7 +197,7 @@ async def show_links(query: CallbackQuery, ctx: AppContext, user: User, locale: 
         await query.message.answer(
             text,
             parse_mode="MarkdownV2",
-            reply_markup=_actions(ctx, locale, order.id, order.status),
+            reply_markup=_actions(ctx, locale, order.id, order.status, order.type),
         )
 
 
@@ -233,7 +230,7 @@ async def support_idea(message: Message, locale: str, state: FSMContext, ctx: Ap
 
 @router.message(SupportWizard.contacts)
 async def support_contacts(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
-    await state.update_data(contacts=_blank(message.text))
+    await state.update_data(contacts=_blank(ctx.i18n, message.text))
     await state.set_state(SupportWizard.references)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_references"),
@@ -244,7 +241,7 @@ async def support_contacts(message: Message, locale: str, state: FSMContext, ctx
 
 @router.message(SupportWizard.references)
 async def support_references(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
-    await state.update_data(references=_blank(message.text))
+    await state.update_data(references=_blank(ctx.i18n, message.text))
     await state.set_state(SupportWizard.budget)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_budget"),
@@ -255,7 +252,7 @@ async def support_references(message: Message, locale: str, state: FSMContext, c
 
 @router.message(SupportWizard.budget)
 async def support_budget(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
-    data = await state.update_data(budget=_blank(message.text))
+    data = await state.update_data(budget=_blank(ctx.i18n, message.text))
     await state.set_state(SupportWizard.confirm)
     dash = ctx.i18n.get(locale, "order.dash")
     await message.answer(
@@ -274,7 +271,7 @@ async def support_budget(message: Message, locale: str, state: FSMContext, ctx: 
     )
 
 
-@router.message(SupportWizard.confirm, F.text.in_(CONFIRM))
+@router.message(SupportWizard.confirm, LocaleText("common.btn_confirm"))
 async def support_confirm(
     message: Message,
     ctx: AppContext,

@@ -29,9 +29,9 @@ class UpsertUser:
                 language=language or self._default_locale,
             )
             return await self._users.add(user)
-        existing.username = username or existing.username
-        if display_name:
-            existing.display_name = display_name
+        existing.username = username if username is not None else existing.username
+        # Preferred display name is collected in the order wizard; do not clobber it
+        # with Telegram full_name on every subsequent update.
         if language:
             existing.language = language
         existing.updated_at = datetime.now(UTC)

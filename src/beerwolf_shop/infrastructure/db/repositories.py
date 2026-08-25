@@ -4,6 +4,7 @@ from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from beerwolf_shop.domain.entities import CompletionLink, Order, User
@@ -11,6 +12,7 @@ from beerwolf_shop.domain.enums import OrderStatus, OrderType
 from beerwolf_shop.infrastructure.db.models import (
     CompletionLinkTable,
     OrderTable,
+    OutboxEventTable,
     UserTable,
     WebhookDeliveryTable,
 )
@@ -52,11 +54,11 @@ class SqlOrderRepository:
         self._session = session
 
     async def get(self, order_id: UUID) -> Order | None:
-        row = await self._session.get(OrderTable, order_id)
-        if row is None:
-            return None
-        await self._session.refresh(row, attribute_names=["links"])
-        return row.to_domain()
+        result = await self._session.execute(
+            select(OrderTable).options(selectinload(OrderTable.links)).where(OrderTable.id == order_id)
+        )
+        row = result.scalars().first()
+        return row.to_domain() if row else None
 
     async def add(self, order: Order) -> Order:
         row = OrderTable.from_domain(order)
@@ -65,7 +67,10 @@ class SqlOrderRepository:
         return row.to_domain()
 
     async def save(self, order: Order) -> Order:
-        row = await self._session.get(OrderTable, order.id)
+        result = await self._session.execute(
+            select(OrderTable).options(selectinload(OrderTable.links)).where(OrderTable.id == order.id)
+        )
+        row = result.scalars().first()
         if row is None:
             return await self.add(order)
         row.apply(order)
@@ -73,7 +78,7 @@ class SqlOrderRepository:
         return row.to_domain()
 
     def _filtered(self, status: OrderStatus | None, order_type: OrderType | None):
-        stmt = select(OrderTable)
+        stmt = select(OrderTable).options(selectinload(OrderTable.links))
         if status is not None:
             stmt = stmt.where(OrderTable.status == status.value)
         if order_type is not None:
@@ -108,6 +113,7 @@ class SqlOrderRepository:
     async def list_for_customer(self, telegram_id: int) -> list[Order]:
         result = await self._session.exec(
             select(OrderTable)
+            .options(selectinload(OrderTable.links))
             .where(OrderTable.customer_telegram_id == telegram_id)
             .order_by(OrderTable.created_at.desc())
         )
@@ -115,7 +121,9 @@ class SqlOrderRepository:
 
     async def find_by_repo(self, owner: str, repo: str) -> list[Order]:
         result = await self._session.exec(
-            select(OrderTable).where(
+            select(OrderTable)
+            .options(selectinload(OrderTable.links))
+            .where(
                 func.lower(OrderTable.github_owner) == owner.lower(),
                 func.lower(OrderTable.github_repo) == repo.lower(),
             )
@@ -158,3 +166,24 @@ class SqlWebhookDeliveryRepository:
         except IntegrityError:
             return False
         return True
+
+
+class SqlOutboxRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def enqueue(self, kind: str, payload: dict) -> None:
+        self._session.add(OutboxEventTable(kind=kind, payload=payload))
+
+    async def claim_pending(self, *, limit: int = 25, max_attempts: int = 8) -> list[OutboxEventTable]:
+        """Lock a batch of unsent events. SKIP LOCKED lets concurrent drains proceed."""
+        stmt = (
+            select(OutboxEventTable)
+            .where(OutboxEventTable.processed_at.is_(None))
+            .where(OutboxEventTable.attempts < max_attempts)
+            .order_by(OutboxEventTable.created_at)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())

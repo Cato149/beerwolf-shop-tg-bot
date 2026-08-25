@@ -1,6 +1,6 @@
 """Customer commission request wizard."""
 
-from aiogram import F, Router
+from aiogram import Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
@@ -14,23 +14,19 @@ from beerwolf_shop.infrastructure.telegram.keyboards import (
     wizard_menu,
 )
 from beerwolf_shop.presentation.telegram.context import AppContext
-from beerwolf_shop.presentation.telegram.handlers.common import reply_error, require_text
+from beerwolf_shop.presentation.telegram.handlers.common import LocaleText, reply_error, require_text
 from beerwolf_shop.presentation.telegram.states import OrderWizard
 
 router = Router(name="order_wizard")
 
-SKIP = {"Пропустить", "Skip"}
-CONFIRM = {"Подтвердить", "Confirm"}
-START = {"Новая заявка", "New request"}
 
-
-def _blank(value: str | None) -> str | None:
-    if value is None or value.strip() in SKIP or not value.strip():
+def _blank(i18n, value: str | None) -> str | None:
+    if value is None or not value.strip() or i18n.matches(value, "common.btn_skip"):
         return None
     return value.strip()
 
 
-@router.message(F.text.in_(START))
+@router.message(LocaleText("common.btn_new_order"))
 async def start_wizard(message: Message, ctx: AppContext, locale: str, state: FSMContext) -> None:
     await state.set_state(OrderWizard.name)
     await message.answer(
@@ -70,7 +66,7 @@ async def got_idea(message: Message, locale: str, state: FSMContext, ctx: AppCon
 
 @router.message(OrderWizard.contacts)
 async def got_contacts(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
-    await state.update_data(contacts=_blank(message.text))
+    await state.update_data(contacts=_blank(ctx.i18n, message.text))
     await state.set_state(OrderWizard.references)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_references"),
@@ -81,7 +77,7 @@ async def got_contacts(message: Message, locale: str, state: FSMContext, ctx: Ap
 
 @router.message(OrderWizard.references)
 async def got_references(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
-    await state.update_data(references=_blank(message.text))
+    await state.update_data(references=_blank(ctx.i18n, message.text))
     await state.set_state(OrderWizard.budget)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_budget"),
@@ -92,7 +88,7 @@ async def got_references(message: Message, locale: str, state: FSMContext, ctx: 
 
 @router.message(OrderWizard.budget)
 async def got_budget(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
-    data = await state.update_data(budget=_blank(message.text))
+    data = await state.update_data(budget=_blank(ctx.i18n, message.text))
     await state.set_state(OrderWizard.confirm)
     dash = ctx.i18n.get(locale, "order.dash")
     await message.answer(
@@ -111,7 +107,7 @@ async def got_budget(message: Message, locale: str, state: FSMContext, ctx: AppC
     )
 
 
-@router.message(OrderWizard.confirm, F.text.in_(CONFIRM))
+@router.message(OrderWizard.confirm, LocaleText("common.btn_confirm"))
 async def confirm_order(
     message: Message,
     ctx: AppContext,

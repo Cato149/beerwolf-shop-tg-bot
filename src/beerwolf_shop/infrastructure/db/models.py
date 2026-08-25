@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import BigInteger, Column, DateTime, Text, UniqueConstraint
+from sqlalchemy import JSON, BigInteger, Column, DateTime, Integer, Text, UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
 
 from beerwolf_shop.domain.entities import CompletionLink, Order, User
@@ -76,9 +76,16 @@ class OrderTable(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
     updated_at: datetime = Field(default_factory=_utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
 
-    links: list["CompletionLinkTable"] = Relationship(back_populates="order")
+    links: list["CompletionLinkTable"] = Relationship(
+        back_populates="order",
+        sa_relationship_kwargs={"lazy": "noload"},
+    )
 
     def to_domain(self) -> Order:
+        # Read the instrumented collection from instance state only. Accessing
+        # `self.links` would emit a lazy SELECT and raise MissingGreenlet on
+        # the async session (add/save after flush, lists without selectinload).
+        raw_links = self.__dict__.get("links") or []
         return Order(
             id=self.id,
             customer_telegram_id=self.customer_telegram_id,
@@ -97,7 +104,7 @@ class OrderTable(SQLModel, table=True):
             completion_message=self.completion_message,
             created_at=self.created_at,
             updated_at=self.updated_at,
-            links=[row.to_domain() for row in (self.links or [])],
+            links=[row.to_domain() for row in raw_links],
         )
 
     @classmethod
@@ -149,7 +156,10 @@ class CompletionLinkTable(SQLModel, table=True):
     title: str
     created_at: datetime = Field(default_factory=_utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
 
-    order: OrderTable | None = Relationship(back_populates="links")
+    order: OrderTable | None = Relationship(
+        back_populates="links",
+        sa_relationship_kwargs={"lazy": "noload"},
+    )
 
     def to_domain(self) -> CompletionLink:
         return CompletionLink(
@@ -205,3 +215,19 @@ class WebhookDeliveryTable(SQLModel, table=True):
 
     delivery_id: str = Field(primary_key=True, max_length=128)
     created_at: datetime = Field(default_factory=_utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
+
+
+class OutboxEventTable(SQLModel, table=True):
+    """Durable Telegram notifications sent only after the business transaction commits."""
+
+    __tablename__ = "outbox_events"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    kind: str = Field(index=True, max_length=64)
+    payload: dict = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    attempts: int = Field(default=0, sa_column=Column(Integer, nullable=False, server_default="0"))
+    last_error: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    created_at: datetime = Field(default_factory=_utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
+    processed_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True, index=True)
+    )

@@ -36,12 +36,14 @@ from beerwolf_shop.domain.entities import User
 from beerwolf_shop.infrastructure.db.repositories import (
     SqlCompletionLinkRepository,
     SqlOrderRepository,
+    SqlOutboxRepository,
     SqlUserRepository,
     SqlWebhookDeliveryRepository,
 )
 from beerwolf_shop.infrastructure.github.client import GithubClient
 from beerwolf_shop.infrastructure.telegram.i18n import I18n
-from beerwolf_shop.infrastructure.telegram.notifier import TelegramNotifier
+from beerwolf_shop.infrastructure.telegram.notifier import NotifierPort
+from beerwolf_shop.infrastructure.telegram.outbox import OutboxNotifier, OutboxProcessor
 
 
 class AppContext:
@@ -53,7 +55,7 @@ class AppContext:
         settings: Settings,
         i18n: I18n,
         github: GithubClient,
-        notifier: TelegramNotifier,
+        notifier: NotifierPort,
     ) -> None:
         self.session = session
         self.settings = settings
@@ -90,14 +92,14 @@ class DbMiddleware(BaseMiddleware):
         settings: Settings,
         i18n: I18n,
         github: GithubClient,
-        notifier: TelegramNotifier,
+        outbox: OutboxProcessor,
     ) -> None:
         super().__init__()
         self._session_factory = session_factory
         self._settings = settings
         self._i18n = i18n
         self._github = github
-        self._notifier = notifier
+        self._outbox = outbox
 
     async def __call__(
         self,
@@ -106,7 +108,13 @@ class DbMiddleware(BaseMiddleware):
         data: dict[str, Any],
     ) -> Any:
         async with self._session_factory() as session:
-            ctx = AppContext(session, self._settings, self._i18n, self._github, self._notifier)
+            ctx = AppContext(
+                session,
+                self._settings,
+                self._i18n,
+                self._github,
+                OutboxNotifier(SqlOutboxRepository(session)),
+            )
             data["ctx"] = ctx
             data["settings"] = self._settings
             data["i18n"] = self._i18n
@@ -131,10 +139,11 @@ class DbMiddleware(BaseMiddleware):
             try:
                 result = await handler(event, data)
                 await session.commit()
-                return result
             except Exception:
                 await session.rollback()
                 raise
+            await self._outbox.drain()
+            return result
 
 
 def locale_of(user: User | None, settings: Settings) -> str:

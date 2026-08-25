@@ -8,6 +8,7 @@ from beerwolf_shop.config import Settings
 from beerwolf_shop.domain.entities import Order
 from beerwolf_shop.domain.enums import OrderStatus
 from beerwolf_shop.domain.exceptions import (
+    AccessDeniedError,
     DuplicateDeliveryError,
     GithubIntegrationError,
     InvalidStatusTransitionError,
@@ -60,12 +61,13 @@ class StartInProgress:
         github_repo = await self._github.get_repo(owner, repo)
         projects = await self._github.list_repository_projects(owner, repo)
         selected_id = dto.project_id
+        project_ids = {item.id for item in projects}
+        if selected_id is not None and selected_id not in project_ids:
+            raise GithubIntegrationError("github_project_unknown")
         if selected_id is None:
             if len(projects) == 1:
                 selected_id = projects[0].id
-            elif len(projects) == 0:
-                selected_id = None
-            else:
+            elif len(projects) > 1:
                 return order, [], projects
         hook_url = self._settings.github_webhook_url()
         if hook_url and self._settings.github_webhook_secret:
@@ -92,7 +94,9 @@ class BuildProgress:
         self, order_id, *, actor_telegram_id: int | None = None, is_admin: bool = False
     ) -> ProgressSnapshot:
         order = await require_order(self._orders, order_id)
-        if not is_admin and actor_telegram_id is not None:
+        if not is_admin:
+            if actor_telegram_id is None:
+                raise AccessDeniedError("not_owner")
             assert_owner(order, actor_telegram_id)
         if order.status not in {OrderStatus.in_progress, OrderStatus.completed}:
             raise GithubIntegrationError("progress_unavailable")
@@ -249,6 +253,6 @@ class HandleIssueClosed:
         matched = [
             order
             for order in await self._orders.find_by_repo(owner, name)
-            if order.status in {OrderStatus.in_progress, OrderStatus.completed}
+            if order.status == OrderStatus.in_progress
         ]
         return matched, rendered, closed

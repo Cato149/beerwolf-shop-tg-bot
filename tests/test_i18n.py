@@ -17,3 +17,14 @@ def test_fallback_to_ru() -> None:
     i18n = I18n(default_locale="ru")
     text = i18n.get("de", "common.cancelled")
     assert text == i18n.get("ru", "common.cancelled")
+
+
+def test_button_labels_match_every_locale() -> None:
+    i18n = I18n(default_locale="ru")
+    assert i18n.matches("Подтвердить", "common.btn_confirm")
+    assert i18n.matches("Confirm", "common.btn_confirm")
+    assert i18n.matches("Новая заявка", "common.btn_new_order")
+    assert i18n.matches("New request", "common.btn_new_order")
+    assert i18n.matches("Админка", "admin.btn_menu")
+    assert i18n.matches("Admin", "admin.btn_menu")
+    assert not i18n.matches("Nope", "common.btn_confirm")

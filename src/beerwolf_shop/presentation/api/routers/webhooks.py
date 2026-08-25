@@ -2,7 +2,6 @@
 
 import hmac
 import json
-import logging
 from hashlib import sha256
 from typing import Annotated
 
@@ -15,8 +14,6 @@ from beerwolf_shop.config import Settings
 from beerwolf_shop.domain.exceptions import DuplicateDeliveryError, GithubIntegrationError
 from beerwolf_shop.presentation.api.deps import get_context, get_settings
 from beerwolf_shop.presentation.telegram.context import AppContext
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["webhooks"])
 
@@ -96,18 +93,14 @@ async def github_webhook(
     if result is None:
         return {"status": "ignored"}
     orders, rendered, closed = result
-    try:
-        for order in orders:
-            customer = await ctx.users.get_by_telegram_id(order.customer_telegram_id)
-            locale = customer.language if customer else settings.default_locale
-            await ctx.notifier.send_closed_issue(
-                order.customer_telegram_id,
-                locale,
-                closed.title,
-                closed.html_url,
-                rendered,
-            )
-    except Exception:
-        logger.exception("Failed to notify customers about closed issue %s", closed.html_url)
-        raise
+    for order in orders:
+        customer = await ctx.users.get_by_telegram_id(order.customer_telegram_id)
+        locale = customer.language if customer else settings.default_locale
+        await ctx.notifier.send_closed_issue(
+            order.customer_telegram_id,
+            locale,
+            closed.title,
+            closed.html_url,
+            rendered,
+        )
     return {"status": "ok"}

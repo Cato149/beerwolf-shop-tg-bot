@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import html
 import logging
 from collections.abc import Sequence
+from typing import Protocol
 
 from aiogram import Bot
 from aiogram.enums import ParseMode
@@ -17,6 +19,23 @@ from beerwolf_shop.infrastructure.telegram.i18n import I18n
 from beerwolf_shop.infrastructure.telegram.keyboards import admin_new_order_actions, render_md
 
 logger = logging.getLogger(__name__)
+
+
+class NotifierPort(Protocol):
+    """Send or enqueue customer/admin Telegram notifications."""
+
+    async def notify_admins_new_order(self, order: Order, customer: User | None, locale: str = "ru") -> None: ...
+
+    async def notify_customer(self, telegram_id: int, locale: str, key: str, **kwargs: object) -> None: ...
+
+    async def send_closed_issue(
+        self,
+        telegram_id: int,
+        locale: str,
+        title: str,
+        url: str,
+        rendered: RenderedMarkdown,
+    ) -> None: ...
 
 
 class TelegramNotifier:
@@ -76,7 +95,12 @@ class TelegramNotifier:
         if html_text:
             await self._bot.send_message(telegram_id, html_text, parse_mode=ParseMode.HTML)
         for url, caption in photos:
-            await self._bot.send_photo(telegram_id, url, caption=caption[:1024] or None)
+            await self._bot.send_photo(
+                telegram_id,
+                url,
+                caption=html.escape(caption[:1024]) or None,
+                parse_mode=ParseMode.HTML,
+            )
 
     async def send_closed_issue(
         self,

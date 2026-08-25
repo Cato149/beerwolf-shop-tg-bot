@@ -1,11 +1,12 @@
 """Start, language, cancel, help."""
 
-from aiogram import F, Router
-from aiogram.filters import Command, CommandStart
+from aiogram import Router
+from aiogram.filters import Command, CommandStart, Filter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from beerwolf_shop.domain.entities import User
+from beerwolf_shop.infrastructure.telegram.i18n import I18n
 from beerwolf_shop.infrastructure.telegram.keyboards import (
     LangCb,
     language_inline,
@@ -15,6 +16,16 @@ from beerwolf_shop.infrastructure.telegram.keyboards import (
 from beerwolf_shop.presentation.telegram.context import AppContext
 
 router = Router(name="common")
+
+
+class LocaleText(Filter):
+    """Match a reply-keyboard label from any locale catalog, not a hardcoded string."""
+
+    def __init__(self, key: str) -> None:
+        self.key = key
+
+    async def __call__(self, message: Message, i18n: I18n) -> bool:
+        return i18n.matches(message.text, self.key)
 
 
 async def reply_error(message: Message, ctx: AppContext, locale: str) -> None:
@@ -52,7 +63,7 @@ async def cmd_help(message: Message, ctx: AppContext, locale: str) -> None:
     await message.answer(render_md(ctx.i18n, locale, "common.help"), parse_mode="MarkdownV2")
 
 
-@router.message(F.text.in_({"Язык", "Language"}))
+@router.message(LocaleText("common.btn_language"))
 @router.message(Command("language"))
 async def cmd_language(message: Message, ctx: AppContext, locale: str) -> None:
     await message.answer(
@@ -81,7 +92,7 @@ async def set_language(
         )
 
 
-@router.message(F.text.in_({"Отмена", "Cancel"}))
+@router.message(LocaleText("common.btn_cancel"))
 @router.message(Command("cancel"))
 async def cmd_cancel(message: Message, ctx: AppContext, locale: str, is_admin: bool, state: FSMContext) -> None:
     await state.clear()

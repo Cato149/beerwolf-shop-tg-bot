@@ -10,6 +10,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from beerwolf_shop.application.auth import decode_access_token
 from beerwolf_shop.config import Settings
 from beerwolf_shop.domain.exceptions import AuthError
+from beerwolf_shop.infrastructure.db.repositories import SqlOutboxRepository
+from beerwolf_shop.infrastructure.telegram.outbox import OutboxNotifier
 from beerwolf_shop.presentation.telegram.context import AppContext
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -28,6 +30,10 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
         except Exception:
             await session.rollback()
             raise
+        else:
+            outbox = getattr(request.app.state, "outbox", None)
+            if outbox is not None:
+                await outbox.drain()
 
 
 def get_context(request: Request, session: Annotated[AsyncSession, Depends(get_session)]) -> AppContext:
@@ -36,7 +42,7 @@ def get_context(request: Request, session: Annotated[AsyncSession, Depends(get_s
         settings=request.app.state.settings,
         i18n=request.app.state.i18n,
         github=request.app.state.github,
-        notifier=request.app.state.notifier,
+        notifier=OutboxNotifier(SqlOutboxRepository(session)),
     )
 
 

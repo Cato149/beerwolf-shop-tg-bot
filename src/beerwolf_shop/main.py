@@ -16,6 +16,7 @@ from beerwolf_shop.infrastructure.db.session import create_session_factory
 from beerwolf_shop.infrastructure.github.client import GithubClient
 from beerwolf_shop.infrastructure.telegram.i18n import I18n
 from beerwolf_shop.infrastructure.telegram.notifier import TelegramNotifier
+from beerwolf_shop.infrastructure.telegram.outbox import OutboxProcessor
 from beerwolf_shop.presentation.api.errors import domain_error_response
 from beerwolf_shop.presentation.api.routers import admin, auth, health, me, orders, webhooks
 from beerwolf_shop.presentation.telegram.bot import create_bot, create_dispatcher
@@ -34,8 +35,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session_factory = create_session_factory(settings)
         github = GithubClient(settings.github_token)
         bot = create_bot(settings)
-        dispatcher = create_dispatcher(settings, session_factory, i18n, github, bot)
         notifier = TelegramNotifier(bot, i18n, settings)
+        outbox = OutboxProcessor(session_factory, notifier)
+        dispatcher = create_dispatcher(settings, session_factory, i18n, github, outbox)
 
         if settings.bot_token and not settings.bot_username:
             try:
@@ -51,6 +53,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.bot = bot
         app.state.dispatcher = dispatcher
         app.state.notifier = notifier
+        app.state.outbox = outbox
 
         polling_task: asyncio.Task[None] | None = None
         try:

@@ -34,7 +34,7 @@ from beerwolf_shop.presentation.telegram.formatters import (
     admin_order_card,
     list_title,
 )
-from beerwolf_shop.presentation.telegram.handlers.common import reply_error, require_text
+from beerwolf_shop.presentation.telegram.handlers.common import LocaleText, reply_error, require_text
 from beerwolf_shop.presentation.telegram.states import (
     AdminComplete,
     AdminLinkGithub,
@@ -45,15 +45,19 @@ logger = logging.getLogger(__name__)
 router = Router(name="admin")
 
 PAGE_SIZE = 5
-SKIP = {"Пропустить", "Skip"}
-CONFIRM = {"Подтвердить", "Confirm"}
-ADMIN_MENU = {"Админка", "Admin"}
 
 
-def _blank(value: str | None) -> str | None:
-    if value is None or value.strip() in SKIP or not value.strip():
+def _blank(i18n, value: str | None) -> str | None:
+    if value is None or not value.strip() or i18n.matches(value, "common.btn_skip"):
         return None
     return value.strip()
+
+
+def _order_type_from_kind(kind: str) -> OrderType | None:
+    try:
+        return OrderType(kind)
+    except ValueError:
+        return None
 
 
 def _status_from_filter(key: str) -> OrderStatus | None:
@@ -71,7 +75,7 @@ async def _require_admin(query_or_message: CallbackQuery | Message, is_admin: bo
     return False
 
 
-@router.message(F.text.in_(ADMIN_MENU))
+@router.message(LocaleText("admin.btn_menu"))
 @router.message(Command("admin"))
 async def open_admin(message: Message, ctx: AppContext, locale: str, is_admin: bool) -> None:
     if not is_admin:
@@ -102,11 +106,13 @@ async def _send_order_list(
 
     buttons = [(order.id, list_title(order, ctx.i18n, locale)) for order in items]
     has_next = offset + PAGE_SIZE < total
+    kind = order_type.value if order_type is not None else "all"
+    title_key = "admin.btn_support_queue" if order_type == OrderType.support else "admin.btn_orders"
     await target.answer(
-        render_md(ctx.i18n, locale, "admin.btn_orders"),
+        render_md(ctx.i18n, locale, title_key),
         parse_mode="MarkdownV2",
         reply_markup=admin_list_keyboard(
-            ctx.i18n, locale, current=status_key, page=page, has_next=has_next, orders=buttons
+            ctx.i18n, locale, current=status_key, page=page, has_next=has_next, orders=buttons, kind=kind
         ),
     )
 
@@ -123,7 +129,14 @@ async def list_orders_cb(
         return
     await query.answer()
     if query.message:
-        await _send_order_list(query.message, ctx, locale, callback_data.status, callback_data.page)
+        await _send_order_list(
+            query.message,
+            ctx,
+            locale,
+            callback_data.status,
+            callback_data.page,
+            order_type=_order_type_from_kind(callback_data.kind),
+        )
 
 
 @router.callback_query(F.data == "admin:support")
@@ -131,20 +144,9 @@ async def support_queue(query: CallbackQuery, ctx: AppContext, locale: str, is_a
     if not await _require_admin(query, is_admin):
         return
     await query.answer()
-    items, _total = await ctx.list_orders.execute(OrderStatus.application, OrderType.support, offset=0, limit=PAGE_SIZE)
     if query.message:
-        if not items:
-            await query.message.answer(render_md(ctx.i18n, locale, "admin.list_empty"), parse_mode="MarkdownV2")
-            return
-        from beerwolf_shop.infrastructure.telegram.keyboards import admin_list_keyboard
-
-        buttons = [(order.id, list_title(order, ctx.i18n, locale)) for order in items]
-        await query.message.answer(
-            render_md(ctx.i18n, locale, "admin.btn_support_queue"),
-            parse_mode="MarkdownV2",
-            reply_markup=admin_list_keyboard(
-                ctx.i18n, locale, current="application", page=0, has_next=False, orders=buttons
-            ),
+        await _send_order_list(
+            query.message, ctx, locale, "application", 0, order_type=OrderType.support
         )
 
 
@@ -246,7 +248,9 @@ async def start_in_progress(
 
 
 @router.message(AdminLinkGithub.repo_url)
-async def got_repo(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
+async def got_repo(message: Message, locale: str, state: FSMContext, ctx: AppContext, is_admin: bool) -> None:
+    if not await _require_admin(message, is_admin):
+        return
     raw = await require_text(message, ctx, locale)
     if raw is None:
         return
@@ -335,6 +339,8 @@ async def got_project_name(
     is_admin: bool,
     state: FSMContext,
 ) -> None:
+    if not await _require_admin(message, is_admin):
+        return
     text = await require_text(message, ctx, locale)
     if text is None:
         return
@@ -387,8 +393,8 @@ async def start_complete(
         )
 
 
-def _parse_links(text: str | None) -> list[tuple[str, str]]:
-    if not text or text.strip() in SKIP:
+def _parse_links(text: str | None, i18n) -> list[tuple[str, str]]:
+    if text is None or not text.strip() or i18n.matches(text, "common.btn_skip"):
         return []
     result: list[tuple[str, str]] = []
     for raw in text.splitlines():
@@ -404,8 +410,10 @@ def _parse_links(text: str | None) -> list[tuple[str, str]]:
 
 
 @router.message(AdminComplete.links)
-async def got_links(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
-    await state.update_data(links=_parse_links(message.text))
+async def got_links(message: Message, locale: str, state: FSMContext, ctx: AppContext, is_admin: bool) -> None:
+    if not await _require_admin(message, is_admin):
+        return
+    await state.update_data(links=_parse_links(message.text, ctx.i18n))
     await state.set_state(AdminComplete.message)
     await message.answer(
         render_md(ctx.i18n, locale, "admin.ask_completion_text"),
@@ -422,8 +430,10 @@ async def got_complete_message(
     is_admin: bool,
     state: FSMContext,
 ) -> None:
+    if not await _require_admin(message, is_admin):
+        return
     data = await state.get_data()
-    extra = _blank(message.text)
+    extra = _blank(ctx.i18n, message.text)
     try:
         order = await ctx.complete_order.execute(
             CompleteOrderDTO(order_id=UUID(data["order_id"]), links=data.get("links") or [], message=extra)
@@ -462,7 +472,9 @@ async def start_manual(query: CallbackQuery, ctx: AppContext, locale: str, is_ad
 
 
 @router.message(AdminManualWizard.customer)
-async def manual_customer(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
+async def manual_customer(message: Message, locale: str, state: FSMContext, ctx: AppContext, is_admin: bool) -> None:
+    if not await _require_admin(message, is_admin):
+        return
     raw = (message.text or "").strip()
     telegram_id = None
     username = None
@@ -487,7 +499,9 @@ async def manual_customer(message: Message, locale: str, state: FSMContext, ctx:
 
 
 @router.message(AdminManualWizard.name)
-async def manual_name(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
+async def manual_name(message: Message, locale: str, state: FSMContext, ctx: AppContext, is_admin: bool) -> None:
+    if not await _require_admin(message, is_admin):
+        return
     await state.update_data(display_name=(message.text or "").strip())
     await state.set_state(AdminManualWizard.idea)
     await message.answer(
@@ -498,7 +512,9 @@ async def manual_name(message: Message, locale: str, state: FSMContext, ctx: App
 
 
 @router.message(AdminManualWizard.idea)
-async def manual_idea(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
+async def manual_idea(message: Message, locale: str, state: FSMContext, ctx: AppContext, is_admin: bool) -> None:
+    if not await _require_admin(message, is_admin):
+        return
     await state.update_data(idea=(message.text or "").strip())
     await state.set_state(AdminManualWizard.contacts)
     await message.answer(
@@ -509,8 +525,10 @@ async def manual_idea(message: Message, locale: str, state: FSMContext, ctx: App
 
 
 @router.message(AdminManualWizard.contacts)
-async def manual_contacts(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
-    await state.update_data(contacts=_blank(message.text))
+async def manual_contacts(message: Message, locale: str, state: FSMContext, ctx: AppContext, is_admin: bool) -> None:
+    if not await _require_admin(message, is_admin):
+        return
+    await state.update_data(contacts=_blank(ctx.i18n, message.text))
     await state.set_state(AdminManualWizard.references)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_references"),
@@ -520,8 +538,10 @@ async def manual_contacts(message: Message, locale: str, state: FSMContext, ctx:
 
 
 @router.message(AdminManualWizard.references)
-async def manual_references(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
-    await state.update_data(references=_blank(message.text))
+async def manual_references(message: Message, locale: str, state: FSMContext, ctx: AppContext, is_admin: bool) -> None:
+    if not await _require_admin(message, is_admin):
+        return
+    await state.update_data(references=_blank(ctx.i18n, message.text))
     await state.set_state(AdminManualWizard.budget)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_budget"),
@@ -531,8 +551,10 @@ async def manual_references(message: Message, locale: str, state: FSMContext, ct
 
 
 @router.message(AdminManualWizard.budget)
-async def manual_budget(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
-    data = await state.update_data(budget=_blank(message.text))
+async def manual_budget(message: Message, locale: str, state: FSMContext, ctx: AppContext, is_admin: bool) -> None:
+    if not await _require_admin(message, is_admin):
+        return
+    data = await state.update_data(budget=_blank(ctx.i18n, message.text))
     await state.set_state(AdminManualWizard.confirm)
     dash = ctx.i18n.get(locale, "order.dash")
     await message.answer(
@@ -551,7 +573,7 @@ async def manual_budget(message: Message, locale: str, state: FSMContext, ctx: A
     )
 
 
-@router.message(AdminManualWizard.confirm, F.text.in_(CONFIRM))
+@router.message(AdminManualWizard.confirm, LocaleText("common.btn_confirm"))
 async def manual_confirm(
     message: Message,
     ctx: AppContext,
@@ -559,6 +581,8 @@ async def manual_confirm(
     is_admin: bool,
     state: FSMContext,
 ) -> None:
+    if not await _require_admin(message, is_admin):
+        return
     data = await state.get_data()
     try:
         order = await ctx.create_manual.execute(

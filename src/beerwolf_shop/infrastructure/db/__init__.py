@@ -2,6 +2,7 @@ from beerwolf_shop.infrastructure.db.models import (
     CompletionLinkTable,
     FsmStateTable,
     OrderTable,
+    OutboxEventTable,
     UserTable,
     WebhookDeliveryTable,
 )
@@ -11,6 +12,7 @@ __all__ = [
     "CompletionLinkTable",
     "FsmStateTable",
     "OrderTable",
+    "OutboxEventTable",
     "UserTable",
     "WebhookDeliveryTable",
     "create_session_factory",
