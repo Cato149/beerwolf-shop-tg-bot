@@ -160,19 +160,33 @@ lazysql
 
 ## Деплой (GitHub Actions)
 
-После зелёных `lint-and-test` и `docker` push (или ручной `workflow_dispatch`) в `main` SSHится на VPS, обновляет клон и пересобирает Compose. `.env` на сервере Git не трогает. Caddy на хосте: копируется `Caddyfile` в `/etc/caddy/` и делается `systemctl reload`.
+После зелёных `lint-and-test` и `docker` push (или ручной `workflow_dispatch`) в `main` job **Deploy to production**:
 
-Секреты репозитория (Settings → Secrets and variables → Actions), environment `production`:
+1. пишет `.env` из секрета `APP_ENV` (весь файл одним значением);
+2. копирует `.env` на VPS по SCP;
+3. по SSH делает `git pull`, `docker compose up --build -d`, копирует `Caddyfile` в `/etc/caddy/` и `systemctl reload`.
+
+Environment в GitHub: **production** (Settings → Environments).
+
+### Secrets
 
 | Секрет | Назначение |
 |---|---|
+| `APP_ENV` | полный текст `.env` (как `.env.example`, реальные значения) |
 | `DEPLOY_HOST` | IP или hostname сервера |
-| `DEPLOY_USER` | SSH-пользователь (docker без sudo или NOPASSWD) |
-| `DEPLOY_SSH_KEY` | приватный ключ этого пользователя |
-| `DEPLOY_PATH` | абсолютный путь клону репозитория на сервере |
-| `DEPLOY_PORT` | SSH-порт, по умолчанию `22` |
+| `DEPLOY_USER` | SSH-пользователь |
+| `DEPLOY_SSH_KEY` | приватный ключ |
 
-Первый раз на сервере: клон репозитория, deploy key для `git fetch`, `.env` из `.env.example`, пользователь в группе `docker`, для reload Caddy — `sudo` без пароля на `cp`/`systemctl reload caddy`.
+В `APP_ENV` для Compose укажите `DATABASE_URL` с хостом `db`, `BOT_MODE=webhook`, `PUBLIC_BASE_URL` / `CADDY_DOMAIN` / `CADDY_EMAIL` как на проде.
+
+### Variables
+
+| Variable | Назначение |
+|---|---|
+| `DEPLOY_PATH` | абсолютный путь клона на сервере |
+| `DEPLOY_SSH_PORT` | SSH-порт, по умолчанию `22` |
+
+Первый раз на сервере: клон репозитория, deploy key для `git fetch`, пользователь в группе `docker`, для reload Caddy — `sudo` без пароля на `cp`/`systemctl reload caddy`. `.env` руками создавать не нужно — его пишет CI.
 
 ## Gitflow
 

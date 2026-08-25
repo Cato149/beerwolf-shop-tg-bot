@@ -39,24 +39,38 @@ jobs:
       group: production-deploy
       cancel-in-progress: false
     steps:
-      - name: Deploy over SSH
-        uses: appleboy/ssh-action@v1.2.2
+      - uses: actions/checkout@v4
+
+      - name: Write production .env
         env:
-          # Absolute path of the git clone on the VPS (secret, not a repo variable).
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          APP_ENV: ${{ secrets.APP_ENV }}
+        run: ./scripts/write-env.sh
+
+      - name: Copy .env to the server
+        uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          # Empty secret falls back to 22.
-          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          port: ${{ vars.DEPLOY_SSH_PORT || 22 }}
+          source: .env
+          target: ${{ vars.DEPLOY_PATH }}
+          overwrite: true
+
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.2
+        env:
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ vars.DEPLOY_SSH_PORT || 22 }}
           script_stop: true
           command_timeout: 20m
           envs: DEPLOY_PATH
           script: |
             set -eu
             cd "$DEPLOY_PATH"
-            # Fast-forward first so this commit's scripts/deploy.sh exists on the host.
-            git fetch origin main
-            git checkout -B main origin/main
+            chmod 600 .env
             DEPLOY_BRANCH=main ./scripts/deploy.sh
