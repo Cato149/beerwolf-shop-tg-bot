@@ -20,6 +20,15 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from beerwolf_shop.infrastructure.db.models import FsmStateTable
 
 
+def _as_table(row: FsmStateTable | object | None) -> FsmStateTable | None:
+    """session.exec(sqlalchemy.select(...)) may yield a Row; we need the mapped instance."""
+    if row is None:
+        return None
+    if isinstance(row, FsmStateTable):
+        return row
+    return row[0]  # type: ignore[index]
+
+
 class PostgresStorage(BaseStorage):
     """Persists FSM state and data in the `fsm_states` table.
 
@@ -45,8 +54,8 @@ class PostgresStorage(BaseStorage):
             FsmStateTable.business_connection_id == (key.business_connection_id or ""),
             FsmStateTable.destiny == key.destiny,
         )
-        result = await session.exec(stmt)
-        return result.first()
+        result = await session.execute(stmt)
+        return _as_table(result.scalars().first())
 
     async def _get_or_create(self, session: AsyncSession, key: StorageKey) -> FsmStateTable:
         row = await self._get_row(session, key)
