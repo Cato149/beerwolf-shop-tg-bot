@@ -2,7 +2,7 @@ services:
   app:
     build: .
     env_file: .env
-    # Loopback only: host Caddy proxies here. Do not publish 8000 on the public interface.
+    # Loopback only: the host reverse proxy (see README) should reach this port.
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
