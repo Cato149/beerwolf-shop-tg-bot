@@ -149,9 +149,11 @@ async def _send_order_list(
     offset = page * PAGE_SIZE
     items, total = await ctx.list_orders.execute(status, order_type, offset=offset, limit=PAGE_SIZE)
     await _delete_previous_list(target.bot, target.chat.id, state)
-    card_ids: list[int] = []
+    projects: list[tuple[Order, str]] = []
     for order in items:
-        card_ids.extend(await _send_admin_card(target, ctx, locale, order))
+        customer = await ctx.users.get_by_telegram_id(order.customer_telegram_id)
+        customer_name = customer.display_name if customer else str(order.customer_telegram_id)
+        projects.append((order, customer_name))
     pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
     has_next = offset + PAGE_SIZE < total
     kind = order_type.value if order_type is not None else "all"
@@ -170,23 +172,39 @@ async def _send_order_list(
     control = await target.answer(
         header,
         parse_mode="HTML",
-        reply_markup=admin_list_keyboard(ctx.i18n, locale, current=status_key, page=page, has_next=has_next, kind=kind),
+        reply_markup=admin_list_keyboard(
+            ctx.i18n,
+            locale,
+            current=status_key,
+            page=page,
+            has_next=has_next,
+            kind=kind,
+            projects=projects,
+        ),
     )
-    await state.update_data(**{ADMIN_CARD_IDS: card_ids, ADMIN_CONTROL_ID: control.message_id})
+    await state.update_data(**{ADMIN_CARD_IDS: [], ADMIN_CONTROL_ID: control.message_id})
 
 
 @router.message(LocaleText("admin.btn_orders"))
 async def open_orders(message: Message, ctx: AppContext, locale: str, is_admin: bool, state: FSMContext) -> None:
     if not await _require_admin(message, is_admin):
         return
-    await _send_order_list(message, ctx, locale, "all", 0, state)
+    await _send_order_list(
+        message,
+        ctx,
+        locale,
+        "application",
+        0,
+        state,
+        order_type=OrderType.commission,
+    )
 
 
 @router.message(LocaleText("admin.btn_spam"))
 async def open_spam(message: Message, ctx: AppContext, locale: str, is_admin: bool, state: FSMContext) -> None:
     if not await _require_admin(message, is_admin):
         return
-    await _send_order_list(message, ctx, locale, "spam", 0, state)
+    await _send_order_list(message, ctx, locale, "spam", 0, state, order_type=OrderType.commission)
 
 
 @router.message(LocaleText("admin.btn_support_queue"))
@@ -215,6 +233,12 @@ async def admin_back(
         parse_mode="HTML",
         reply_markup=await build_main_menu(ctx, user, locale, is_admin),
     )
+
+
+@router.callback_query(F.data == "admin:page:noop")
+async def pagination_noop(query: CallbackQuery) -> None:
+    """Acknowledge unavailable edge controls without rebuilding the list."""
+    await query.answer()
 
 
 @router.callback_query(AdminListCb.filter())
@@ -286,6 +310,37 @@ async def mark_spam(
     await query.answer()
     if query.message:
         await query.message.answer(render_md(ctx.i18n, locale, "admin.spam_marked"), parse_mode="HTML")
+
+
+@router.callback_query(AdminOrderCb.filter(F.action == "cancel"))
+async def cancel_project(
+    query: CallbackQuery,
+    callback_data: AdminOrderCb,
+    ctx: AppContext,
+    locale: str,
+    is_admin: bool,
+) -> None:
+    if not await _require_admin(query, is_admin):
+        return
+    try:
+        order = await ctx.cancel_order.execute(UUID(callback_data.order_id))
+    except DomainError:
+        await query.answer(ctx.i18n.get(locale, "common.error_generic"), show_alert=True)
+        return
+    customer = await ctx.users.get_by_telegram_id(order.customer_telegram_id)
+    customer_locale = customer.language if customer else ctx.settings.default_locale
+    await ctx.notifier.notify_customer(
+        order.customer_telegram_id,
+        customer_locale,
+        "order.cancelled_customer",
+        refresh_menu=True,
+    )
+    await query.answer()
+    if query.message:
+        await query.message.answer(
+            render_md(ctx.i18n, locale, "admin.project_cancelled"),
+            parse_mode="HTML",
+        )
 
 
 @router.callback_query(AdminOrderCb.filter(F.action == "disc"))
@@ -470,7 +525,8 @@ async def _finish_link(
                 repo_url=data["repo_url"],
                 project_display_name=data["project_display_name"],
                 project_id=project_id,
-            )
+            ),
+            allow_any_status=True,
         )
     except GithubIntegrationError:
         await message.answer(render_md(ctx.i18n, locale, "admin.repo_fail"), parse_mode="HTML")
@@ -621,7 +677,8 @@ async def got_complete_message(
     extra = _blank(ctx.i18n, message.text)
     try:
         order = await ctx.complete_order.execute(
-            CompleteOrderDTO(order_id=UUID(data["order_id"]), links=data.get("links") or [], message=extra)
+            CompleteOrderDTO(order_id=UUID(data["order_id"]), links=data.get("links") or [], message=extra),
+            allow_any_status=True,
         )
     except DomainError:
         await reply_error(message, ctx, locale)

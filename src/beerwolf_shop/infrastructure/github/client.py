@@ -7,6 +7,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from typing import Any
 from urllib.parse import quote
 
@@ -61,6 +62,7 @@ class GithubIssue:
     milestone_title: str | None
     milestone_due_on: str | None
     is_pull_request: bool
+    labels: list[str] = dataclass_field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -317,6 +319,11 @@ class GithubClient:
 
     def _issue_from_rest(self, item: dict[str, Any]) -> GithubIssue:
         milestone = item.get("milestone") or {}
+        labels = [
+            label["name"].strip()
+            for label in item.get("labels") or []
+            if isinstance(label, dict) and isinstance(label.get("name"), str) and label["name"].strip()
+        ]
         return GithubIssue(
             number=item["number"],
             title=item.get("title") or "",
@@ -327,6 +334,7 @@ class GithubClient:
             milestone_title=milestone.get("title"),
             milestone_due_on=milestone.get("due_on"),
             is_pull_request="pull_request" in item,
+            labels=labels,
         )
 
     async def list_issue_comments(self, owner: str, repo: str, number: int) -> list[str]:

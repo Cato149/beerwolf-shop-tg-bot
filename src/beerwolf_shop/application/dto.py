@@ -57,6 +57,9 @@ class MilestoneSummary(BaseModel):
     number: int
     title: str
     due_on: str | None = None
+    total: int = 0
+    done: int = 0
+    percent: int = 0
 
 
 class MilestoneTask(BaseModel):
@@ -64,12 +67,17 @@ class MilestoneTask(BaseModel):
     title: str
     status: str
     due_on: str | None = None
+    labels: list[str] = Field(default_factory=list)
+    description: str = ""
 
 
 class MilestoneDetails(BaseModel):
     number: int
     title: str
     due_on: str | None = None
+    total: int = 0
+    done: int = 0
+    percent: int = 0
     tasks: list[MilestoneTask] = Field(default_factory=list)
 
 

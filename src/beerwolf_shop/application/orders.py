@@ -198,6 +198,19 @@ class ChangeStatus:
         return await self._orders.save(order)
 
 
+class CancelOrder:
+    """Allow an administrator to stop a commission from any lifecycle stage."""
+
+    def __init__(self, orders: OrderRepository) -> None:
+        self._orders = orders
+
+    async def execute(self, order_id: UUID) -> Order:
+        order = await require_order(self._orders, order_id)
+        order.status = OrderStatus.cancelled
+        order.touch()
+        return await self._orders.save(order)
+
+
 class MarkSpam:
     def __init__(self, orders: OrderRepository) -> None:
         self._orders = orders
@@ -219,9 +232,10 @@ class CompleteOrder:
         self._orders = orders
         self._links = links
 
-    async def execute(self, dto: CompleteOrderDTO) -> Order:
+    async def execute(self, dto: CompleteOrderDTO, *, allow_any_status: bool = False) -> Order:
         order = await require_order(self._orders, dto.order_id)
-        assert_transition(order, OrderStatus.completed)
+        if not allow_any_status:
+            assert_transition(order, OrderStatus.completed)
         order.status = OrderStatus.completed
         order.completion_message = dto.message
         order.touch()
