@@ -1,10 +1,11 @@
-"""Human-readable order cards (still rendered as MarkdownV2 via locale templates)."""
+"""Human-readable Telegram HTML cards and project updates."""
 
 from beerwolf_shop.application.dto import MilestoneDetails
-from beerwolf_shop.domain.entities import Order, User
+from beerwolf_shop.domain.entities import CompletionLink, Order, User
 from beerwolf_shop.domain.enums import OrderStatus, OrderType
 from beerwolf_shop.infrastructure.telegram.i18n import I18n
 from beerwolf_shop.infrastructure.telegram.keyboards import render_md
+from beerwolf_shop.infrastructure.telegram.markdown import SafeHtml, html_lines, html_link
 
 
 def status_label(i18n: I18n, locale: str, status: OrderStatus) -> str:
@@ -100,6 +101,13 @@ def milestone_message(i18n: I18n, locale: str, details: MilestoneDetails) -> str
             )
         )
     return "\n".join(lines)
+
+
+def completion_links_html(links: list[CompletionLink], fallback: str) -> SafeHtml:
+    """Render result links with readable labels and validated destinations."""
+    if not links:
+        return SafeHtml(fallback)
+    return html_lines([SafeHtml(f"• {html_link(link.title, link.url)}") for link in links])
 
 
 def list_title(order: Order, i18n: I18n, locale: str) -> str:

@@ -16,6 +16,7 @@ from beerwolf_shop.domain.entities import Order, User
 from beerwolf_shop.domain.enums import OrderStatus, OrderType
 from beerwolf_shop.domain.exceptions import DomainError, GithubIntegrationError
 from beerwolf_shop.infrastructure.github.client import parse_repo_url
+from beerwolf_shop.infrastructure.telegram.i18n import I18n
 from beerwolf_shop.infrastructure.telegram.keyboards import (
     STATUS_FILTERS,
     AdminListCb,
@@ -34,7 +35,7 @@ from beerwolf_shop.infrastructure.telegram.keyboards import (
 )
 from beerwolf_shop.infrastructure.telegram.photos import send_file_id_photos
 from beerwolf_shop.presentation.telegram.context import AppContext
-from beerwolf_shop.presentation.telegram.formatters import admin_order_card
+from beerwolf_shop.presentation.telegram.formatters import admin_order_card, completion_links_html
 from beerwolf_shop.presentation.telegram.handlers.common import (
     LocaleText,
     build_main_menu,
@@ -49,6 +50,7 @@ from beerwolf_shop.presentation.telegram.states import (
 
 logger = logging.getLogger(__name__)
 router = Router(name="admin")
+_access_i18n = I18n()
 
 PAGE_SIZE = 5
 ADMIN_CARD_IDS = "admin_card_ids"
@@ -79,7 +81,9 @@ async def _require_admin(query_or_message: CallbackQuery | Message, is_admin: bo
     if is_admin:
         return True
     if isinstance(query_or_message, CallbackQuery):
-        await query_or_message.answer("forbidden", show_alert=True)
+        language = query_or_message.from_user.language_code or ""
+        locale = "ru" if language.lower().startswith("ru") else "en"
+        await query_or_message.answer(_access_i18n.get(locale, "common.error_forbidden"), show_alert=True)
     return False
 
 
@@ -109,7 +113,7 @@ async def _admin_card_text(ctx: AppContext, locale: str, order: Order) -> str:
 async def _send_admin_card(message: Message, ctx: AppContext, locale: str, order: Order) -> list[int]:
     sent = await message.answer(
         await _admin_card_text(ctx, locale, order),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=admin_order_kb(order.id, order.status, ctx.i18n, locale, order.type),
     )
     ids = [sent.message_id]
@@ -126,7 +130,7 @@ async def open_admin(message: Message, ctx: AppContext, locale: str, is_admin: b
     stats = await ctx.get_admin_stats.execute()
     await message.answer(
         render_md(ctx.i18n, locale, "admin.menu", **stats),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=admin_work_menu(ctx.i18n, locale),
     )
 
@@ -165,7 +169,7 @@ async def _send_order_list(
         header = header + "\n" + render_md(ctx.i18n, locale, "admin.list_empty")
     control = await target.answer(
         header,
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=admin_list_keyboard(ctx.i18n, locale, current=status_key, page=page, has_next=has_next, kind=kind),
     )
     await state.update_data(**{ADMIN_CARD_IDS: card_ids, ADMIN_CONTROL_ID: control.message_id})
@@ -208,7 +212,7 @@ async def admin_back(
     await _delete_previous_list(message.bot, message.chat.id, state)
     await message.answer(
         render_md(ctx.i18n, locale, "common.start", name=user.display_name),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=await build_main_menu(ctx, user, locale, is_admin),
     )
 
@@ -264,7 +268,7 @@ async def view_order(
         except DomainError:
             await query.message.answer(
                 render_md(ctx.i18n, locale, "common.error_generic"),
-                parse_mode="MarkdownV2",
+                parse_mode="HTML",
             )
 
 
@@ -281,7 +285,7 @@ async def mark_spam(
         return
     await query.answer()
     if query.message:
-        await query.message.answer(render_md(ctx.i18n, locale, "admin.spam_marked"), parse_mode="MarkdownV2")
+        await query.message.answer(render_md(ctx.i18n, locale, "admin.spam_marked"), parse_mode="HTML")
 
 
 @router.callback_query(AdminOrderCb.filter(F.action == "disc"))
@@ -310,7 +314,7 @@ async def start_discussion(
     )
     await query.answer()
     if query.message:
-        await query.message.answer(render_md(ctx.i18n, locale, "admin.discussion_marked"), parse_mode="MarkdownV2")
+        await query.message.answer(render_md(ctx.i18n, locale, "admin.discussion_marked"), parse_mode="HTML")
 
 
 @router.callback_query(AdminOrderCb.filter(F.action == "sup_take"))
@@ -347,7 +351,7 @@ async def take_support(
                 project=parent.project_display_name or "",
                 milestone=ticket.github_milestone_title or "",
             ),
-            parse_mode="MarkdownV2",
+            parse_mode="HTML",
         )
 
 
@@ -376,7 +380,7 @@ async def cancel_support(
     )
     await query.answer()
     if query.message:
-        await query.message.answer(render_md(ctx.i18n, locale, "admin.support_cancelled"), parse_mode="MarkdownV2")
+        await query.message.answer(render_md(ctx.i18n, locale, "admin.support_cancelled"), parse_mode="HTML")
 
 
 @router.callback_query(AdminOrderCb.filter(F.action == "sup_done"))
@@ -404,7 +408,7 @@ async def complete_support(
     )
     await query.answer()
     if query.message:
-        await query.message.answer(render_md(ctx.i18n, locale, "admin.support_completed"), parse_mode="MarkdownV2")
+        await query.message.answer(render_md(ctx.i18n, locale, "admin.support_completed"), parse_mode="HTML")
 
 
 @router.callback_query(AdminOrderCb.filter(F.action == "ip"))
@@ -424,7 +428,7 @@ async def start_in_progress(
     if query.message:
         await query.message.answer(
             render_md(ctx.i18n, locale, "admin.ask_repo_url"),
-            parse_mode="MarkdownV2",
+            parse_mode="HTML",
             reply_markup=wizard_menu(ctx.i18n, locale, with_skip=False),
         )
 
@@ -439,13 +443,13 @@ async def got_repo(message: Message, locale: str, state: FSMContext, ctx: AppCon
     try:
         parse_repo_url(raw)
     except GithubIntegrationError:
-        await message.answer(render_md(ctx.i18n, locale, "admin.repo_fail"), parse_mode="MarkdownV2")
+        await message.answer(render_md(ctx.i18n, locale, "admin.repo_fail"), parse_mode="HTML")
         return
     await state.update_data(repo_url=raw)
     await state.set_state(AdminLinkGithub.project_name)
     await message.answer(
         render_md(ctx.i18n, locale, "admin.ask_project_name"),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=wizard_menu(ctx.i18n, locale, with_skip=False),
     )
 
@@ -469,7 +473,7 @@ async def _finish_link(
             )
         )
     except GithubIntegrationError:
-        await message.answer(render_md(ctx.i18n, locale, "admin.repo_fail"), parse_mode="MarkdownV2")
+        await message.answer(render_md(ctx.i18n, locale, "admin.repo_fail"), parse_mode="HTML")
         return
     except DomainError:
         await reply_error(message, ctx, locale)
@@ -479,7 +483,7 @@ async def _finish_link(
         await state.set_state(AdminLinkGithub.project_choice)
         await message.answer(
             render_md(ctx.i18n, locale, "admin.choose_project"),
-            parse_mode="MarkdownV2",
+            parse_mode="HTML",
             reply_markup=project_choice([(p.id, p.title) for p in projects]),
         )
         return
@@ -507,7 +511,7 @@ async def _finish_link(
             project=order.project_display_name or "",
             milestones=milestone_text,
         ),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=main_menu(ctx.i18n, locale, is_admin=is_admin),
     )
 
@@ -569,7 +573,7 @@ async def start_complete(
     if query.message:
         await query.message.answer(
             render_md(ctx.i18n, locale, "admin.ask_completion_links"),
-            parse_mode="MarkdownV2",
+            parse_mode="HTML",
             reply_markup=wizard_menu(ctx.i18n, locale, with_skip=True),
         )
 
@@ -598,7 +602,7 @@ async def got_links(message: Message, locale: str, state: FSMContext, ctx: AppCo
     await state.set_state(AdminComplete.message)
     await message.answer(
         render_md(ctx.i18n, locale, "admin.ask_completion_text"),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=wizard_menu(ctx.i18n, locale, with_skip=True),
     )
 
@@ -624,12 +628,16 @@ async def got_complete_message(
         return
     customer = await ctx.users.get_by_telegram_id(order.customer_telegram_id)
     customer_locale = customer.language if customer else ctx.settings.default_locale
+    customer_links = completion_links_html(
+        order.links,
+        ctx.i18n.get(customer_locale, "customer.no_links"),
+    )
     await ctx.notifier.notify_customer(
         order.customer_telegram_id,
         customer_locale,
         "order.completed_customer",
         message=extra or "",
-        links="\n".join(f"• {link.title}: {link.url}" for link in order.links),
+        links=customer_links,
         refresh_menu=True,
     )
     await state.clear()
@@ -639,9 +647,9 @@ async def got_complete_message(
             locale,
             "order.completed_customer",
             message=extra or "",
-            links="\n".join(f"• {link.title}: {link.url}" for link in order.links),
+            links=completion_links_html(order.links, ctx.i18n.get(locale, "customer.no_links")),
         ),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=main_menu(ctx.i18n, locale, is_admin=is_admin),
     )
 
@@ -650,7 +658,7 @@ async def _start_manual_wizard(message: Message, ctx: AppContext, locale: str, s
     await state.set_state(AdminManualWizard.customer)
     await message.answer(
         render_md(ctx.i18n, locale, "admin.ask_customer_id"),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=wizard_menu(ctx.i18n, locale, with_skip=False),
     )
 
@@ -693,7 +701,7 @@ async def manual_customer(message: Message, locale: str, state: FSMContext, ctx:
     await state.set_state(AdminManualWizard.name)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_name"),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=wizard_menu(ctx.i18n, locale, with_skip=False),
     )
 
@@ -706,7 +714,7 @@ async def manual_name(message: Message, locale: str, state: FSMContext, ctx: App
     await state.set_state(AdminManualWizard.idea)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_idea"),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=wizard_menu(ctx.i18n, locale, with_skip=False),
     )
 
@@ -719,7 +727,7 @@ async def manual_idea(message: Message, locale: str, state: FSMContext, ctx: App
     await state.set_state(AdminManualWizard.contacts)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_contacts"),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=wizard_menu(ctx.i18n, locale, with_skip=True),
     )
 
@@ -732,7 +740,7 @@ async def manual_contacts(message: Message, locale: str, state: FSMContext, ctx:
     await state.set_state(AdminManualWizard.references)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_references"),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=wizard_menu(ctx.i18n, locale, with_skip=True),
     )
 
@@ -745,7 +753,7 @@ async def manual_references(message: Message, locale: str, state: FSMContext, ct
     await state.set_state(AdminManualWizard.budget)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_budget"),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=wizard_menu(ctx.i18n, locale, with_skip=True),
     )
 
@@ -768,7 +776,7 @@ async def manual_budget(message: Message, locale: str, state: FSMContext, ctx: A
             references=data.get("references") or dash,
             budget=data.get("budget") or dash,
         ),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=confirm_menu(ctx.i18n, locale),
     )
 
@@ -804,6 +812,6 @@ async def manual_confirm(
     await state.clear()
     await message.answer(
         render_md(ctx.i18n, locale, "admin.created_manual"),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=main_menu(ctx.i18n, locale, is_admin=is_admin),
     )

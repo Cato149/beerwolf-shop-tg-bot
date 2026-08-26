@@ -18,6 +18,7 @@ from beerwolf_shop.domain.entities import Order, User
 from beerwolf_shop.domain.protocols import OrderRepository, UserRepository
 from beerwolf_shop.infrastructure.db.repositories import SqlOrderRepository, SqlOutboxRepository, SqlUserRepository
 from beerwolf_shop.infrastructure.github.gfm import RenderedMarkdown
+from beerwolf_shop.infrastructure.telegram.markdown import SafeHtml
 from beerwolf_shop.infrastructure.telegram.notifier import TelegramNotifier
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,29 @@ KIND_NOTIFY_ADMINS_REQUEST = "notify_admins_customer_request"
 KIND_NOTIFY_CUSTOMER = "notify_customer"
 KIND_CLOSED_ISSUE = "closed_issue"
 KIND_ISSUE_UPDATE = "issue_update"
+_SAFE_HTML_MARKER = "__beerwolf_safe_html__"
+
+
+def serialize_rich_value(value: object) -> object:
+    """Preserve trusted HTML fragments across the JSON outbox boundary."""
+    if isinstance(value, SafeHtml):
+        return {_SAFE_HTML_MARKER: str(value)}
+    if isinstance(value, dict):
+        return {str(key): serialize_rich_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [serialize_rich_value(item) for item in value]
+    return value
+
+
+def deserialize_rich_value(value: object) -> object:
+    """Restore trusted fragments created by :func:`serialize_rich_value`."""
+    if isinstance(value, dict):
+        if set(value) == {_SAFE_HTML_MARKER} and isinstance(value[_SAFE_HTML_MARKER], str):
+            return SafeHtml(value[_SAFE_HTML_MARKER])
+        return {str(key): deserialize_rich_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [deserialize_rich_value(item) for item in value]
+    return value
 
 
 class OutboxNotifier:
@@ -79,7 +103,7 @@ class OutboxNotifier:
                 "telegram_id": telegram_id,
                 "locale": locale,
                 "key": key,
-                "kwargs": kwargs,
+                "kwargs": serialize_rich_value(kwargs),
                 "refresh_menu": refresh_menu,
             },
         )
@@ -139,7 +163,7 @@ async def deliver_outbox_event(
         )
         return
     if kind == KIND_NOTIFY_CUSTOMER:
-        kwargs = payload.get("kwargs") or {}
+        kwargs = deserialize_rich_value(payload.get("kwargs") or {})
         if not isinstance(kwargs, dict):
             kwargs = {}
         reply_markup = None

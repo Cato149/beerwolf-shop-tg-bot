@@ -19,6 +19,7 @@ from beerwolf_shop.presentation.api.schemas import (
     StatusChangeIn,
 )
 from beerwolf_shop.presentation.telegram.context import AppContext
+from beerwolf_shop.presentation.telegram.formatters import completion_links_html
 
 router = APIRouter(
     prefix="/api/v1/admin/orders",
@@ -191,7 +192,7 @@ async def change_status(
             locale,
             "order.completed_customer",
             message=body.message or "",
-            links="\n".join(f"• {link.title}: {link.url}" for link in order.links),
+            links=completion_links_html(order.links, ctx.i18n.get(locale, "customer.no_links")),
             refresh_menu=True,
         )
         return to_order_out(order)

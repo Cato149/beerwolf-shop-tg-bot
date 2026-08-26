@@ -21,7 +21,7 @@ async def handle_telegram_error(event: ErrorEvent, i18n: I18n, locale: str = "ru
         if update.callback_query:
             await update.callback_query.answer(text[:200], show_alert=True)
         elif update.message:
-            # parse_mode=None: error text has punctuation and the bot default is MarkdownV2.
+            # Error feedback stays plain text even when the bot default is rich HTML.
             await update.message.answer(text, parse_mode=None)
         elif update.edited_message:
             await update.edited_message.answer(text, parse_mode=None)

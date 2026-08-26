@@ -61,13 +61,13 @@ async def wizard_step_value(
     if collect_photo_file_ids(message):
         await message.answer(
             render_md(ctx.i18n, locale, "order.photo_saved"),
-            parse_mode="MarkdownV2",
+            parse_mode="HTML",
         )
         return None
     if required:
         await message.answer(
             render_md(ctx.i18n, locale, "common.error_empty"),
-            parse_mode="MarkdownV2",
+            parse_mode="HTML",
         )
         return None
     return ""
@@ -86,7 +86,7 @@ class LocaleText(Filter):
 async def reply_error(message: Message, ctx: AppContext, locale: str) -> None:
     await message.answer(
         render_md(ctx.i18n, locale, "common.error_generic"),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
     )
 
 
@@ -95,7 +95,7 @@ async def require_text(message: Message, ctx: AppContext, locale: str) -> str | 
     if not text:
         await message.answer(
             render_md(ctx.i18n, locale, "common.error_empty"),
-            parse_mode="MarkdownV2",
+            parse_mode="HTML",
         )
         return None
     return text
@@ -108,14 +108,14 @@ async def cmd_start(
     await state.clear()
     await message.answer(
         render_md(ctx.i18n, locale, "common.start", name=user.display_name),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=await build_main_menu(ctx, user, locale, is_admin),
     )
 
 
 @router.message(Command("help"))
 async def cmd_help(message: Message, ctx: AppContext, locale: str) -> None:
-    await message.answer(render_md(ctx.i18n, locale, "common.help"), parse_mode="MarkdownV2")
+    await message.answer(render_md(ctx.i18n, locale, "common.help"), parse_mode="HTML")
 
 
 @router.message(LocaleText("common.btn_language"))
@@ -123,7 +123,7 @@ async def cmd_help(message: Message, ctx: AppContext, locale: str) -> None:
 async def cmd_language(message: Message, ctx: AppContext, locale: str) -> None:
     await message.answer(
         render_md(ctx.i18n, locale, "common.choose_language"),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=language_inline(ctx.i18n, locale),
     )
 
@@ -142,7 +142,7 @@ async def set_language(
     if query.message:
         await query.message.answer(
             render_md(ctx.i18n, locale, "common.language_changed"),
-            parse_mode="MarkdownV2",
+            parse_mode="HTML",
             reply_markup=await build_main_menu(ctx, updated, locale, is_admin),
         )
 
@@ -160,6 +160,6 @@ async def cmd_cancel(
     await state.clear()
     await message.answer(
         render_md(ctx.i18n, locale, "common.cancelled"),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=await build_main_menu(ctx, user, locale, is_admin),
     )

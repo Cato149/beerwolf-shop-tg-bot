@@ -39,18 +39,18 @@ async def start_wizard(message: Message, ctx: AppContext, locale: str, state: FS
         if active is not None and active.status in LOCKED_CUSTOMER_STATUSES:
             await message.answer(
                 render_md(ctx.i18n, locale, "order.active_exists"),
-                parse_mode="MarkdownV2",
+                parse_mode="HTML",
             )
             return
         if active is not None:
             await message.answer(
                 render_md(ctx.i18n, locale, "order.replace_application"),
-                parse_mode="MarkdownV2",
+                parse_mode="HTML",
             )
     await state.set_state(OrderWizard.name)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_name"),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=wizard_menu(ctx.i18n, locale, with_skip=False),
     )
 
@@ -64,7 +64,7 @@ async def got_name(message: Message, locale: str, state: FSMContext, ctx: AppCon
     await state.set_state(OrderWizard.idea)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_idea"),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=wizard_menu(ctx.i18n, locale, with_skip=False),
     )
 
@@ -78,7 +78,7 @@ async def got_idea(message: Message, locale: str, state: FSMContext, ctx: AppCon
     await state.set_state(OrderWizard.contacts)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_contacts"),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=wizard_menu(ctx.i18n, locale, with_skip=True),
     )
 
@@ -92,7 +92,7 @@ async def got_contacts(message: Message, locale: str, state: FSMContext, ctx: Ap
     await state.set_state(OrderWizard.references)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_references"),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=wizard_menu(ctx.i18n, locale, with_skip=True),
     )
 
@@ -106,7 +106,7 @@ async def got_references(message: Message, locale: str, state: FSMContext, ctx: 
     await state.set_state(OrderWizard.budget)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_budget"),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=wizard_menu(ctx.i18n, locale, with_skip=True),
     )
 
@@ -134,7 +134,7 @@ async def got_budget(message: Message, locale: str, state: FSMContext, ctx: AppC
         text += "\n" + render_md(ctx.i18n, locale, "order.photos_attached", count=len(photos))
     await message.answer(
         text,
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=confirm_menu(ctx.i18n, locale),
     )
 
@@ -170,6 +170,6 @@ async def confirm_order(
     await ctx.notifier.notify_admins_new_order(order, user, locale=ctx.settings.default_locale)
     await message.answer(
         render_md(ctx.i18n, locale, "order.submitted"),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=await build_main_menu(ctx, user, locale, is_admin),
     )

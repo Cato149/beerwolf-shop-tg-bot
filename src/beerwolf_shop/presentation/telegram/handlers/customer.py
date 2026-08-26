@@ -20,7 +20,7 @@ from beerwolf_shop.infrastructure.telegram.keyboards import (
     render_md,
     wizard_menu,
 )
-from beerwolf_shop.infrastructure.telegram.markdown import escape_markdown_v2
+from beerwolf_shop.infrastructure.telegram.markdown import escape_html
 from beerwolf_shop.presentation.telegram.context import AppContext
 from beerwolf_shop.presentation.telegram.formatters import (
     customer_order_card,
@@ -56,12 +56,12 @@ async def _send_project(message: Message, ctx: AppContext, user: User, locale: s
         except DomainError:
             await message.answer(
                 render_md(ctx.i18n, locale, "customer.progress_unavailable"),
-                parse_mode="MarkdownV2",
+                parse_mode="HTML",
             )
             return
         await message.answer(
             progress_message(ctx.i18n, locale, order.project_display_name or "", snapshot),
-            parse_mode="MarkdownV2",
+            parse_mode="HTML",
             reply_markup=progress_milestones(
                 ctx.i18n,
                 locale,
@@ -82,7 +82,7 @@ async def _send_project(message: Message, ctx: AppContext, user: User, locale: s
         text = customer_order_card(ctx.i18n, locale, order)
     await message.answer(
         text,
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=_actions(ctx, locale, order),
     )
 
@@ -91,7 +91,7 @@ async def _send_project(message: Message, ctx: AppContext, user: User, locale: s
 async def my_order(message: Message, ctx: AppContext, user: User, locale: str) -> None:
     order = await ctx.get_customer_project.execute(user.telegram_id)
     if order is None:
-        await message.answer(render_md(ctx.i18n, locale, "order.no_orders"), parse_mode="MarkdownV2")
+        await message.answer(render_md(ctx.i18n, locale, "order.no_orders"), parse_mode="HTML")
         return
     await _send_project(message, ctx, user, locale, order)
 
@@ -144,7 +144,7 @@ async def show_milestone(
     if query.message:
         await query.message.answer(
             milestone_message(ctx.i18n, locale, details),
-            parse_mode="MarkdownV2",
+            parse_mode="HTML",
             reply_markup=milestone_back(ctx.i18n, locale, UUID(callback_data.order_id)),
         )
 
@@ -166,11 +166,11 @@ async def milestone_return(
 @router.message(LocaleText("customer.btn_recommend"))
 async def recommend(message: Message, ctx: AppContext, locale: str) -> None:
     if not ctx.settings.bot_username:
-        await message.answer(render_md(ctx.i18n, locale, "common.error_generic"), parse_mode="MarkdownV2")
+        await message.answer(render_md(ctx.i18n, locale, "common.error_generic"), parse_mode="HTML")
         return
     await message.answer(
         render_md(ctx.i18n, locale, "customer.recommend_text"),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=recommendation_share(
             ctx.i18n,
             locale,
@@ -188,7 +188,7 @@ async def start_request(query: CallbackQuery, locale: str, state: FSMContext, ct
     if query.message:
         await query.message.answer(
             render_md(ctx.i18n, locale, "customer.ask_request_wish"),
-            parse_mode="MarkdownV2",
+            parse_mode="HTML",
             reply_markup=wizard_menu(ctx.i18n, locale, with_skip=False),
         )
 
@@ -230,7 +230,7 @@ async def request_wish(
     await state.clear()
     await message.answer(
         render_md(ctx.i18n, locale, "customer.request_created", url=issue.html_url),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=await build_main_menu(ctx, user, locale, is_admin),
     )
 
@@ -253,12 +253,12 @@ async def show_links(query: CallbackQuery, ctx: AppContext, user: User, locale: 
             for link in order.links
         )
         if order.completion_message:
-            lines.append(escape_markdown_v2(order.completion_message))
+            lines.append(escape_html(order.completion_message))
         text = "\n".join(lines)
     if query.message:
         await query.message.answer(
             text,
-            parse_mode="MarkdownV2",
+            parse_mode="HTML",
             reply_markup=_actions(ctx, locale, order),
         )
 
@@ -271,7 +271,7 @@ async def start_support(query: CallbackQuery, locale: str, state: FSMContext, ct
     if query.message:
         await query.message.answer(
             render_md(ctx.i18n, locale, "customer.support_intro"),
-            parse_mode="MarkdownV2",
+            parse_mode="HTML",
             reply_markup=wizard_menu(ctx.i18n, locale, with_skip=False),
         )
 
@@ -302,6 +302,6 @@ async def support_wish(
     await state.clear()
     await message.answer(
         render_md(ctx.i18n, locale, "customer.support_submitted"),
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=await build_main_menu(ctx, user, locale, is_admin),
     )
