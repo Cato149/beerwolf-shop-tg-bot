@@ -17,6 +17,7 @@ from beerwolf_shop.application.orders import (
     ChangeStatus,
     CompleteOrder,
     CreateManualOrder,
+    GetAdminStats,
     GetCustomerProject,
     GetOrder,
     ListCustomerOrders,
@@ -423,6 +424,7 @@ class FakeContext:
         self.submit_order = SubmitOrder(self.users, self.orders)
         self.create_manual = CreateManualOrder(self.users, self.orders)
         self.list_orders = ListOrders(self.orders)
+        self.get_admin_stats = GetAdminStats(self.orders)
         self.get_order = GetOrder(self.orders, self.links)
         self.get_customer_project = GetCustomerProject(self.orders)
         self.list_customer_orders = ListCustomerOrders(self.orders)

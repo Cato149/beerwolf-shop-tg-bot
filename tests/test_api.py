@@ -56,13 +56,16 @@ def test_customer_creates_order() -> None:
         listed = client.get("/api/v1/orders", headers={"Authorization": f"Bearer {token}"})
         assert listed.status_code == 200
         assert len(listed.json()) == 1
+        assert listed.json()[0]["photo_file_ids"] == []
         duplicate = client.post(
             "/api/v1/orders",
             headers={"Authorization": f"Bearer {token}"},
             json={"idea": "Second project", "display_name": "Ann"},
         )
-        assert duplicate.status_code == 409
-        assert duplicate.json()["detail"] == "active_commission_exists"
+        assert duplicate.status_code == 201
+        listed = client.get("/api/v1/orders", headers={"Authorization": f"Bearer {token}"})
+        statuses = {item["status"] for item in listed.json()}
+        assert statuses == {"cancelled", "application"}
 
 
 def test_admin_status_and_list() -> None:

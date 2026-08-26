@@ -45,6 +45,7 @@ def to_order_out(order: Order) -> OrderOut:
         created_at=order.created_at,
         updated_at=order.updated_at,
         links=[CompletionLinkOut(id=link.id, url=link.url, title=link.title) for link in order.links],
+        photo_file_ids=list(order.photo_file_ids),
     )
 
 

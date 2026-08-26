@@ -22,6 +22,7 @@ from beerwolf_shop.domain.entities import Order, User
 from beerwolf_shop.infrastructure.github.gfm import RenderedMarkdown
 from beerwolf_shop.infrastructure.telegram.i18n import I18n
 from beerwolf_shop.infrastructure.telegram.keyboards import admin_new_order_actions, main_menu, render_md
+from beerwolf_shop.infrastructure.telegram.photos import send_file_id_photos
 
 logger = logging.getLogger(__name__)
 _RETRYABLE_TELEGRAM_ERRORS = (TelegramNetworkError, TelegramRetryAfter, TelegramServerError)
@@ -111,6 +112,7 @@ class TelegramNotifier:
                 budget=order.budget or "—",
                 reply_markup=admin_new_order_actions(order.id, self._i18n, locale, order.type),
             )
+            await send_file_id_photos(self._bot, admin_id, order.photo_file_ids)
 
     async def notify_admins_customer_request(
         self,

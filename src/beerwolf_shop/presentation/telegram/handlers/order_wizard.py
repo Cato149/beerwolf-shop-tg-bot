@@ -6,6 +6,7 @@ from aiogram.types import Message
 
 from beerwolf_shop.application.dto import SubmitOrderDTO
 from beerwolf_shop.domain.entities import User
+from beerwolf_shop.domain.enums import LOCKED_CUSTOMER_STATUSES
 from beerwolf_shop.domain.exceptions import DomainError
 from beerwolf_shop.infrastructure.telegram.keyboards import (
     confirm_menu,
@@ -14,30 +15,38 @@ from beerwolf_shop.infrastructure.telegram.keyboards import (
 )
 from beerwolf_shop.presentation.telegram.context import AppContext
 from beerwolf_shop.presentation.telegram.handlers.common import (
+    PHOTO_IDS_KEY,
     LocaleText,
     build_main_menu,
     reply_error,
-    require_text,
+    wizard_step_value,
 )
 from beerwolf_shop.presentation.telegram.states import OrderWizard
 
 router = Router(name="order_wizard")
 
 
-def _blank(i18n, value: str | None) -> str | None:
-    if value is None or not value.strip() or i18n.matches(value, "common.btn_skip"):
+def _optional(value: str | None) -> str | None:
+    if value is None or not value.strip():
         return None
     return value.strip()
 
 
 @router.message(LocaleText("common.btn_new_order"))
 async def start_wizard(message: Message, ctx: AppContext, locale: str, state: FSMContext) -> None:
-    if message.from_user and await ctx.orders.get_active_commission(message.from_user.id):
-        await message.answer(
-            render_md(ctx.i18n, locale, "order.active_exists"),
-            parse_mode="MarkdownV2",
-        )
-        return
+    if message.from_user:
+        active = await ctx.orders.get_active_commission(message.from_user.id)
+        if active is not None and active.status in LOCKED_CUSTOMER_STATUSES:
+            await message.answer(
+                render_md(ctx.i18n, locale, "order.active_exists"),
+                parse_mode="MarkdownV2",
+            )
+            return
+        if active is not None:
+            await message.answer(
+                render_md(ctx.i18n, locale, "order.replace_application"),
+                parse_mode="MarkdownV2",
+            )
     await state.set_state(OrderWizard.name)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_name"),
@@ -48,7 +57,7 @@ async def start_wizard(message: Message, ctx: AppContext, locale: str, state: FS
 
 @router.message(OrderWizard.name)
 async def got_name(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
-    name = await require_text(message, ctx, locale)
+    name = await wizard_step_value(message, state, ctx, locale, required=True)
     if name is None:
         return
     await state.update_data(display_name=name)
@@ -62,7 +71,7 @@ async def got_name(message: Message, locale: str, state: FSMContext, ctx: AppCon
 
 @router.message(OrderWizard.idea)
 async def got_idea(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
-    idea = await require_text(message, ctx, locale)
+    idea = await wizard_step_value(message, state, ctx, locale, required=True)
     if idea is None:
         return
     await state.update_data(idea=idea)
@@ -76,7 +85,10 @@ async def got_idea(message: Message, locale: str, state: FSMContext, ctx: AppCon
 
 @router.message(OrderWizard.contacts)
 async def got_contacts(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
-    await state.update_data(contacts=_blank(ctx.i18n, message.text))
+    value = await wizard_step_value(message, state, ctx, locale, required=False)
+    if value is None:
+        return
+    await state.update_data(contacts=_optional(value))
     await state.set_state(OrderWizard.references)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_references"),
@@ -87,7 +99,10 @@ async def got_contacts(message: Message, locale: str, state: FSMContext, ctx: Ap
 
 @router.message(OrderWizard.references)
 async def got_references(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
-    await state.update_data(references=_blank(ctx.i18n, message.text))
+    value = await wizard_step_value(message, state, ctx, locale, required=False)
+    if value is None:
+        return
+    await state.update_data(references=_optional(value))
     await state.set_state(OrderWizard.budget)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_budget"),
@@ -98,20 +113,27 @@ async def got_references(message: Message, locale: str, state: FSMContext, ctx: 
 
 @router.message(OrderWizard.budget)
 async def got_budget(message: Message, locale: str, state: FSMContext, ctx: AppContext) -> None:
-    data = await state.update_data(budget=_blank(ctx.i18n, message.text))
+    value = await wizard_step_value(message, state, ctx, locale, required=False)
+    if value is None:
+        return
+    data = await state.update_data(budget=_optional(value))
     await state.set_state(OrderWizard.confirm)
     dash = ctx.i18n.get(locale, "order.dash")
+    text = render_md(
+        ctx.i18n,
+        locale,
+        "order.confirm_preview",
+        name=data.get("display_name") or dash,
+        idea=data.get("idea") or dash,
+        contacts=data.get("contacts") or dash,
+        references=data.get("references") or dash,
+        budget=data.get("budget") or dash,
+    )
+    photos = data.get(PHOTO_IDS_KEY) or []
+    if photos:
+        text += "\n" + render_md(ctx.i18n, locale, "order.photos_attached", count=len(photos))
     await message.answer(
-        render_md(
-            ctx.i18n,
-            locale,
-            "order.confirm_preview",
-            name=data.get("display_name") or dash,
-            idea=data.get("idea") or dash,
-            contacts=data.get("contacts") or dash,
-            references=data.get("references") or dash,
-            budget=data.get("budget") or dash,
-        ),
+        text,
         parse_mode="MarkdownV2",
         reply_markup=confirm_menu(ctx.i18n, locale),
     )
@@ -139,6 +161,7 @@ async def confirm_order(
                 budget=data.get("budget"),
                 username=user.username,
                 language=locale,
+                photo_file_ids=list(data.get(PHOTO_IDS_KEY) or []),
             )
         )
     except DomainError:

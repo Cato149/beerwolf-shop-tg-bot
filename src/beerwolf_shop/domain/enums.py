@@ -24,4 +24,11 @@ ACTIVE_CUSTOMER_STATUSES = (
     OrderStatus.in_progress,
 )
 
+# Until admin takes the request further, the customer may still open "new request"
+# (a fresh application replaces the previous one).
+LOCKED_CUSTOMER_STATUSES = (
+    OrderStatus.discussion,
+    OrderStatus.in_progress,
+)
+
 ADMIN_FILTERABLE_STATUSES = tuple(OrderStatus)

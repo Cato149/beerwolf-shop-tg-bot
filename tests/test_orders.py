@@ -31,13 +31,27 @@ async def test_submit_and_spam_does_not_change_customer_flow() -> None:
 
 
 @pytest.mark.asyncio
+async def test_submit_replaces_pending_application() -> None:
+    ctx = FakeContext()
+    first = await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=42, display_name="Wolf", idea="First"))
+    second = await ctx.submit_order.execute(
+        SubmitOrderDTO(customer_telegram_id=42, display_name="Wolf", idea="Second", photo_file_ids=["file-1"])
+    )
+    stored_first = await ctx.orders.get(first.id)
+    assert stored_first is not None
+    assert stored_first.status == OrderStatus.cancelled
+    assert second.status == OrderStatus.application
+    assert second.idea == "Second"
+    assert second.photo_file_ids == ["file-1"]
+
+
+@pytest.mark.asyncio
 async def test_customer_cannot_submit_second_active_commission() -> None:
     ctx = FakeContext()
-    await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=42, display_name="Wolf", idea="First"))
+    order = await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=42, display_name="Wolf", idea="First"))
+    await ctx.start_discussion.execute(order.id)
     with pytest.raises(ActiveCommissionExistsError):
-        await ctx.submit_order.execute(
-            SubmitOrderDTO(customer_telegram_id=42, display_name="Wolf", idea="Second")
-        )
+        await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=42, display_name="Wolf", idea="Second"))
 
 
 @pytest.mark.asyncio
@@ -154,3 +168,20 @@ async def test_customer_request_survives_project_add_failure() -> None:
     )
     assert issue.html_url.endswith("/issues/1")
     assert await ctx.request_issues.find_order_id(issue.node_id) == linked.id
+
+
+@pytest.mark.asyncio
+async def test_admin_stats_count_commission_pipeline() -> None:
+    ctx = FakeContext()
+    await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=1, display_name="A", idea="a"))
+    second = await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=2, display_name="B", idea="b"))
+    await ctx.start_discussion.execute(second.id)
+    stored = await ctx.orders.get(second.id)
+    assert stored is not None
+    stored.status = OrderStatus.in_progress
+    await ctx.orders.save(stored)
+    third = await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=3, display_name="C", idea="c"))
+    third.status = OrderStatus.completed
+    await ctx.orders.save(third)
+    stats = await ctx.get_admin_stats.execute()
+    assert stats == {"new": 1, "in_progress": 1, "completed": 1}

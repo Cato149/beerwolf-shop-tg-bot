@@ -13,9 +13,12 @@ from beerwolf_shop.infrastructure.telegram.keyboards import (
     main_menu,
     render_md,
 )
+from beerwolf_shop.infrastructure.telegram.photos import collect_photo_file_ids
 from beerwolf_shop.presentation.telegram.context import AppContext
 
 router = Router(name="common")
+
+PHOTO_IDS_KEY = "photo_file_ids"
 
 
 async def build_main_menu(ctx: AppContext, user: User, locale: str, is_admin: bool):
@@ -23,6 +26,51 @@ async def build_main_menu(ctx: AppContext, user: User, locale: str, is_admin: bo
 
     project = await ctx.get_customer_project.execute(user.telegram_id)
     return main_menu(ctx.i18n, locale, is_admin=is_admin, project=project)
+
+
+async def append_message_photos(state: FSMContext, message: Message) -> list[str]:
+    """Accumulate Telegram photo file_ids in FSM so albums can be sent across several updates."""
+    incoming = collect_photo_file_ids(message)
+    data = await state.get_data()
+    stored = list(data.get(PHOTO_IDS_KEY) or [])
+    if incoming:
+        stored.extend(incoming)
+        await state.update_data(**{PHOTO_IDS_KEY: stored})
+    return stored
+
+
+async def wizard_step_value(
+    message: Message,
+    state: FSMContext,
+    ctx: AppContext,
+    locale: str,
+    *,
+    required: bool,
+) -> str | None:
+    """Read text/caption for a wizard step. Photo-only messages stay on the same step.
+
+    Returns None when the handler must wait (required empty, or photos without caption).
+    Returns "" when a skippable step is skipped.
+    """
+    await append_message_photos(state, message)
+    raw = (message.text or message.caption or "").strip()
+    if ctx.i18n.matches(raw, "common.btn_skip"):
+        return None if required else ""
+    if raw:
+        return raw
+    if collect_photo_file_ids(message):
+        await message.answer(
+            render_md(ctx.i18n, locale, "order.photo_saved"),
+            parse_mode="MarkdownV2",
+        )
+        return None
+    if required:
+        await message.answer(
+            render_md(ctx.i18n, locale, "common.error_empty"),
+            parse_mode="MarkdownV2",
+        )
+        return None
+    return ""
 
 
 class LocaleText(Filter):

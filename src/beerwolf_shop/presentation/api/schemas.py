@@ -67,6 +67,10 @@ class OrderOut(BaseModel):
     created_at: datetime = Field(description="UTC creation timestamp.")
     updated_at: datetime = Field(description="UTC last update timestamp.")
     links: list[CompletionLinkOut] = Field(default_factory=list, description="Result links after completion.")
+    photo_file_ids: list[str] = Field(
+        default_factory=list,
+        description="Telegram file_ids of photos the customer attached while submitting the request.",
+    )
 
 
 class OrderCreateIn(BaseModel):
