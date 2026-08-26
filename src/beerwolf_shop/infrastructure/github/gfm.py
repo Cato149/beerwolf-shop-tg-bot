@@ -22,7 +22,12 @@ class RenderedMarkdown:
     photos: list[tuple[str, str]]
 
 
-def gfm_to_telegram(markdown: str, *, fallback_caption: str = "") -> RenderedMarkdown:
+def gfm_to_telegram(
+    markdown: str,
+    *,
+    fallback_caption: str = "",
+    extract_images: bool = True,
+) -> RenderedMarkdown:
     """Turn GFM issue text into Telegram HTML and a list of (url, caption) photos.
 
     Images (`![alt](url)`) are stripped from the text and returned separately so
@@ -32,8 +37,13 @@ def gfm_to_telegram(markdown: str, *, fallback_caption: str = "") -> RenderedMar
 
     def take_image(match: re.Match[str]) -> str:
         alt = match.group(1).strip() or fallback_caption
-        photos.append((match.group(2).strip(), alt))
-        return ""
+        url = match.group(2).strip()
+        if extract_images:
+            photos.append((url, alt))
+            return ""
+        # A Telegram text message cannot embed an image in its body, so keep a
+        # readable link when the caller requires all content in one message.
+        return f"[🖼 {alt}]({url})"
 
     text = _IMAGE.sub(take_image, markdown or "")
 

@@ -3,6 +3,7 @@
 from beerwolf_shop.application.dto import MilestoneDetails
 from beerwolf_shop.domain.entities import CompletionLink, Order, User
 from beerwolf_shop.domain.enums import OrderStatus, OrderType
+from beerwolf_shop.infrastructure.github.gfm import gfm_to_telegram
 from beerwolf_shop.infrastructure.telegram.i18n import I18n
 from beerwolf_shop.infrastructure.telegram.keyboards import render_md
 from beerwolf_shop.infrastructure.telegram.markdown import SafeHtml, html_lines, html_link
@@ -10,6 +11,18 @@ from beerwolf_shop.infrastructure.telegram.markdown import SafeHtml, html_lines,
 
 def status_label(i18n: I18n, locale: str, status: OrderStatus) -> str:
     return i18n.get(locale, f"order.status_{status.value}")
+
+
+def task_status_label(i18n: I18n, locale: str, status: str) -> str:
+    """Map standard GitHub Projects statuses while preserving custom columns."""
+    normalized = status.strip().casefold().replace("_", " ")
+    key = {
+        "ready": "ready",
+        "in progress": "in_progress",
+        "done": "done",
+        "open": "open",
+    }.get(normalized)
+    return i18n.get(locale, f"progress.task_status_{key}") if key else status
 
 
 def type_label(i18n: I18n, locale: str, order_type: OrderType) -> str:
@@ -84,23 +97,46 @@ def milestone_message(i18n: I18n, locale: str, details: MilestoneDetails) -> str
             "progress.milestone_header",
             title=details.title,
             due=due,
+            done=details.done,
+            total=details.total,
+            percent=details.percent,
         )
     ]
     if not details.tasks:
         lines.append(render_md(i18n, locale, "progress.milestone_empty"))
     for task in details.tasks:
         task_due = task.due_on[:10] if task.due_on else i18n.get(locale, "progress.none")
+        labels = ", ".join(task.labels) if task.labels else i18n.get(locale, "progress.none")
         lines.append(
             render_md(
                 i18n,
                 locale,
                 "progress.milestone_task",
                 title=task.title,
-                status=task.status,
+                status=task_status_label(i18n, locale, task.status),
                 due=task_due,
+                labels=labels,
             )
         )
-    return "\n".join(lines)
+        rendered_description = gfm_to_telegram(
+            task.description,
+            fallback_caption=task.title,
+            extract_images=False,
+        ).html
+        description: str | SafeHtml = (
+            SafeHtml(rendered_description)
+            if rendered_description
+            else i18n.get(locale, "progress.task_description_empty")
+        )
+        lines.append(
+            render_md(
+                i18n,
+                locale,
+                "progress.milestone_task_description",
+                description=description,
+            )
+        )
+    return "\n\n".join(lines)
 
 
 def completion_links_html(links: list[CompletionLink], fallback: str) -> SafeHtml:

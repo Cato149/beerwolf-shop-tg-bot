@@ -50,6 +50,8 @@ async def test_progress_and_customer_request() -> None:
     from tests.fakes import FakeContext
 
     ctx = FakeContext()
+    ctx.github.milestones[0].open_issues = 1
+    ctx.github.milestones[0].closed_issues = 1
     order = await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=5, display_name="A", idea="ui"))
     await ctx.start_discussion.execute(order.id)
     linked, milestones, _ = await ctx.start_in_progress.execute(
@@ -61,6 +63,7 @@ async def test_progress_and_customer_request() -> None:
     assert snapshot.total == 2
     assert snapshot.done == 1
     assert snapshot.percent == 50
+    assert snapshot.milestones[0].percent == 50
     assert "Draw UI" in snapshot.in_progress[0]
     issue = await ctx.create_request.execute(
         CustomerRequestDTO(order_id=linked.id, wish="Bigger ears\npls", actor_telegram_id=5)
@@ -85,6 +88,24 @@ async def test_graphql_network_error_is_domain_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rest_issue_parser_keeps_label_names() -> None:
+    from beerwolf_shop.infrastructure.github.client import GithubClient
+
+    async with httpx.AsyncClient(base_url="https://api.github.com") as http:
+        client = GithubClient("token", client=http)
+        issue = client._issue_from_rest(
+            {
+                "number": 1,
+                "title": "Task",
+                "state": "open",
+                "labels": [{"name": "design"}, {"name": " ready "}, {"color": "fff"}],
+            }
+        )
+
+    assert issue.labels == ["design", "ready"]
+
+
+@pytest.mark.asyncio
 async def test_milestone_details_use_project_status_and_due_date() -> None:
     from beerwolf_shop.application.dto import LinkGithubDTO, SubmitOrderDTO
     from beerwolf_shop.infrastructure.github.client import GithubIssue, ProjectItem
@@ -92,6 +113,8 @@ async def test_milestone_details_use_project_status_and_due_date() -> None:
     from tests.fakes import FakeContext
 
     ctx = FakeContext()
+    ctx.github.milestones[0].open_issues = 1
+    ctx.github.milestones[0].closed_issues = 1
     order = await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=5, display_name="A", idea="ui"))
     await ctx.start_discussion.execute(order.id)
     linked, _, _ = await ctx.start_in_progress.execute(
@@ -102,12 +125,13 @@ async def test_milestone_details_use_project_status_and_due_date() -> None:
             number=1,
             title="Draw UI",
             state="open",
-            body="",
+            body="**Detailed** brief",
             node_id="I_1",
             html_url="https://github.com/acme/shop/issues/1",
             milestone_title="v1",
             milestone_due_on="2026-09-01T00:00:00Z",
             is_pull_request=False,
+            labels=["design", "ready"],
         )
     ]
     ctx.github.project_items.append(
@@ -127,8 +151,13 @@ async def test_milestone_details_use_project_status_and_due_date() -> None:
 
     details = await ctx.get_milestone_details.execute(linked.id, 1, actor_telegram_id=5)
     assert details.title == "v1"
+    assert details.total == 2
+    assert details.done == 1
+    assert details.percent == 50
     assert details.tasks[0].status == "In Progress"
     assert details.tasks[0].due_on == "2026-09-12"
+    assert details.tasks[0].labels == ["design", "ready"]
+    assert details.tasks[0].description == "**Detailed** brief"
 
 
 @pytest.mark.asyncio

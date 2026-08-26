@@ -153,6 +153,31 @@ async def test_in_progress_requires_discussion() -> None:
 
 
 @pytest.mark.asyncio
+async def test_admin_status_workflows_can_override_current_stage() -> None:
+    ctx = FakeContext()
+    order = await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=1, display_name="A", idea="logo"))
+
+    linked, _milestones, _projects = await ctx.start_in_progress.execute(
+        LinkGithubDTO(
+            order_id=order.id,
+            repo_url="https://github.com/acme/shop",
+            project_display_name="Shop",
+        ),
+        allow_any_status=True,
+    )
+    assert linked.status == OrderStatus.in_progress
+
+    done = await ctx.complete_order.execute(
+        CompleteOrderDTO(order_id=order.id),
+        allow_any_status=True,
+    )
+    assert done.status == OrderStatus.completed
+
+    cancelled = await ctx.cancel_order.execute(order.id)
+    assert cancelled.status == OrderStatus.cancelled
+
+
+@pytest.mark.asyncio
 async def test_customer_request_survives_project_add_failure() -> None:
     from beerwolf_shop.application.dto import CustomerRequestDTO
 

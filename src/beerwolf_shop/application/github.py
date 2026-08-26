@@ -87,9 +87,12 @@ class StartInProgress:
     async def execute(
         self,
         dto: LinkGithubDTO,
+        *,
+        allow_any_status: bool = False,
     ) -> tuple[Order, list[GithubMilestone], list[GithubProject]]:
         order = await require_order(self._orders, dto.order_id)
-        assert_transition(order, OrderStatus.in_progress)
+        if not allow_any_status:
+            assert_transition(order, OrderStatus.in_progress)
         owner, repo = parse_repo_url(dto.repo_url)
         github_repo = await self._github.get_repo(owner, repo)
         projects = await self._github.list_repository_projects(owner, repo)
@@ -190,7 +193,18 @@ class BuildProgress:
             bar=progress_bar(done, total),
             in_progress=in_progress_names[:8],
             milestones=[
-                MilestoneSummary(number=item.number, title=item.title, due_on=item.due_on)
+                MilestoneSummary(
+                    number=item.number,
+                    title=item.title,
+                    due_on=item.due_on,
+                    total=item.open_issues + item.closed_issues,
+                    done=item.closed_issues,
+                    percent=(
+                        0
+                        if item.open_issues + item.closed_issues == 0
+                        else round(100 * item.closed_issues / (item.open_issues + item.closed_issues))
+                    ),
+                )
                 for item in milestones
             ],
             source=source,
@@ -242,12 +256,18 @@ class GetMilestoneDetails:
                     title=issue.title,
                     status=status,
                     due_on=item.due if item else None,
+                    labels=issue.labels,
+                    description=issue.body,
                 )
             )
+        total = milestone.open_issues + milestone.closed_issues
         return MilestoneDetails(
             number=milestone.number,
             title=milestone.title,
             due_on=milestone.due_on,
+            total=total,
+            done=milestone.closed_issues,
+            percent=0 if total == 0 else round(100 * milestone.closed_issues / total),
             tasks=tasks,
         )
 

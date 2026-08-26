@@ -3,11 +3,14 @@ import re
 from pathlib import Path
 from uuid import uuid4
 
+from beerwolf_shop.application.dto import MilestoneSummary
 from beerwolf_shop.domain.entities import Order
 from beerwolf_shop.domain.enums import OrderStatus, OrderType
 from beerwolf_shop.infrastructure.telegram.i18n import I18n
 from beerwolf_shop.infrastructure.telegram.keyboards import (
+    AdminOrderCb,
     admin_list_keyboard,
+    admin_order_card,
     admin_work_menu,
     main_menu,
     progress_milestones,
@@ -76,17 +79,75 @@ def test_main_menu_follows_project_lifecycle() -> None:
 def test_admin_list_keyboard_keeps_filters_without_legacy_actions() -> None:
     i18n = I18n(default_locale="ru")
     markup = admin_list_keyboard(i18n, "ru", current="all", page=0, has_next=True)
-    texts = {button.text for row in markup.inline_keyboard for button in row}
+    buttons = [button for row in markup.inline_keyboard for button in row]
+    texts = {button.text for button in buttons}
     assert "Создать проект" not in texts
     assert "Доработки" not in texts
     assert "• Все" in texts
-    assert "Старее" in texts
+    assert "· Новее" in texts
+    assert "Старее →" in texts
+    assert next(button for button in buttons if button.text == "· Новее").callback_data == "admin:page:noop"
+
+    last_page = admin_list_keyboard(i18n, "ru", current="all", page=2, has_next=False)
+    last_buttons = [button for row in last_page.inline_keyboard for button in row]
+    assert {button.text for button in last_buttons} >= {"← Новее", "Старее ·"}
+    assert next(button for button in last_buttons if button.text == "Старее ·").callback_data == "admin:page:noop"
 
     work = _menu_texts(admin_work_menu(i18n, "ru"))
     assert work == {"Проекты", "Спам", "Доработки", "Создать проект", "Назад"}
 
     progress = progress_milestones(i18n, "ru", uuid4(), [], show_request=True)
     assert progress.inline_keyboard[0][0].text == "Предложить правку"
+
+
+def test_admin_projects_appear_above_filters_and_open_the_card() -> None:
+    i18n = I18n(default_locale="ru")
+    order = Order(
+        customer_telegram_id=1,
+        type=OrderType.commission,
+        idea="Личный сайт",
+        status=OrderStatus.application,
+    )
+    markup = admin_list_keyboard(
+        i18n,
+        "ru",
+        current="application",
+        page=0,
+        has_next=False,
+        kind="commission",
+        projects=[(order, "Волк")],
+    )
+    project_button = markup.inline_keyboard[0][0]
+    callback = AdminOrderCb.unpack(project_button.callback_data)
+    assert project_button.text == "Личный сайт · Заявка · Волк"
+    assert callback.action == "view"
+    assert callback.order_id == str(order.id)
+    assert markup.inline_keyboard[1][0].text == "Все"
+
+
+def test_admin_project_card_has_status_workflows() -> None:
+    i18n = I18n(default_locale="ru")
+    markup = admin_order_card(
+        uuid4(),
+        OrderStatus.application,
+        i18n,
+        "ru",
+        OrderType.commission,
+    )
+    texts = {button.text for row in markup.inline_keyboard for button in row}
+    assert {"Отменить проект", "Открыть студию", "Выпустить проект"} <= texts
+
+
+def test_milestone_button_shows_percent_and_completion_checkmark() -> None:
+    i18n = I18n(default_locale="ru")
+    order_id = uuid4()
+    milestones = [
+        MilestoneSummary(number=1, title="Concept", percent=60),
+        MilestoneSummary(number=2, title="Launch", percent=100),
+    ]
+    markup = progress_milestones(i18n, "ru", order_id, milestones)
+    texts = [row[0].text for row in markup.inline_keyboard]
+    assert texts == ["60% · Concept", "✅ 100% · Launch"]
 
 
 def _read_catalog(locale: str) -> dict[str, str]:

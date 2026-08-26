@@ -20,6 +20,7 @@ from beerwolf_shop.application.github import (
     StartInProgress,
 )
 from beerwolf_shop.application.orders import (
+    CancelOrder,
     ChangeStatus,
     CompleteOrder,
     CreateManualOrder,
@@ -93,6 +94,7 @@ class AppContext:
         self.get_customer_project = GetCustomerProject(self.orders)
         self.list_customer_orders = ListCustomerOrders(self.orders)
         self.change_status = ChangeStatus(self.orders)
+        self.cancel_order = CancelOrder(self.orders)
         self.mark_spam = MarkSpam(self.orders)
         self.start_discussion = StartDiscussion(self.orders)
         self.complete_order = CompleteOrder(self.orders, self.links)

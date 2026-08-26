@@ -137,6 +137,9 @@ class MilestoneSummaryOut(BaseModel):
     number: int = Field(description="Repository milestone number.")
     title: str = Field(description="Milestone title.")
     due_on: str | None = Field(default=None, description="GitHub due date, if configured.")
+    total: int = Field(description="Total issues counted by GitHub for this milestone.")
+    done: int = Field(description="Closed issues counted by GitHub for this milestone.")
+    percent: int = Field(description="Milestone completion percent from 0 to 100.")
 
 
 class MilestoneTaskOut(BaseModel):
@@ -144,12 +147,17 @@ class MilestoneTaskOut(BaseModel):
     title: str = Field(description="Task title.")
     status: str = Field(description="Projects v2 status, or Open/Done fallback.")
     due_on: str | None = Field(default=None, description="Projects v2 due date, if configured.")
+    labels: list[str] = Field(description="GitHub labels attached to the issue.")
+    description: str = Field(description="GitHub issue body in its original Markdown form.")
 
 
 class MilestoneDetailsOut(BaseModel):
     number: int = Field(description="Repository milestone number.")
     title: str = Field(description="Milestone title.")
     due_on: str | None = Field(default=None, description="Milestone due date, if configured.")
+    total: int = Field(description="Total issues counted by GitHub for this milestone.")
+    done: int = Field(description="Closed issues counted by GitHub for this milestone.")
+    percent: int = Field(description="Milestone completion percent from 0 to 100.")
     tasks: list[MilestoneTaskOut] = Field(description="Issues assigned to the milestone.")
 
 

@@ -9,6 +9,7 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
+from beerwolf_shop.application.dto import MilestoneSummary
 from beerwolf_shop.domain.entities import Order
 from beerwolf_shop.domain.enums import LOCKED_CUSTOMER_STATUSES, OrderStatus, OrderType
 from beerwolf_shop.infrastructure.telegram.i18n import I18n
@@ -156,36 +157,30 @@ def admin_order_card(
             text=_label(i18n, locale, "admin.btn_complete"),
             callback_data=AdminOrderCb(action="sup_done", order_id=oid),
         )
-    elif status == OrderStatus.application:
-        builder.button(
-            text=_label(i18n, locale, "admin.btn_take_discussion"),
-            callback_data=AdminOrderCb(action="disc", order_id=oid),
+    elif order_type == OrderType.commission:
+        status_actions = (
+            (OrderStatus.cancelled, "admin.btn_cancel_project", "cancel"),
+            (OrderStatus.in_progress, "admin.btn_in_progress", "ip"),
+            (OrderStatus.completed, "admin.btn_complete", "done"),
         )
-        builder.button(
-            text=_label(i18n, locale, "admin.btn_spam"),
-            callback_data=AdminOrderCb(action="spam", order_id=oid),
-        )
-    if status == OrderStatus.discussion:
-        builder.button(
-            text=_label(i18n, locale, "admin.btn_in_progress"),
-            callback_data=AdminOrderCb(action="ip", order_id=oid),
-        )
-        builder.button(
-            text=_label(i18n, locale, "admin.btn_spam"),
-            callback_data=AdminOrderCb(action="spam", order_id=oid),
-        )
-    if status == OrderStatus.in_progress:
-        if order_type == OrderType.commission:
+        for target_status, key, action in status_actions:
+            is_current = status == target_status
+            label = _label(i18n, locale, key)
             builder.button(
-                text=_label(i18n, locale, "admin.btn_complete"),
-                callback_data=AdminOrderCb(action="done", order_id=oid),
+                text=f"✓ {label}" if is_current else label,
+                callback_data="admin:page:noop" if is_current else AdminOrderCb(action=action, order_id=oid),
+            )
+        if status in {OrderStatus.application, OrderStatus.discussion}:
+            builder.button(
+                text=_label(i18n, locale, "admin.btn_spam"),
+                callback_data=AdminOrderCb(action="spam", order_id=oid),
             )
     builder.button(
         text=_label(i18n, locale, "admin.btn_back_list"),
         callback_data=AdminListCb(
-            status="application" if order_type == OrderType.support else "all",
+            status="application",
             page=0,
-            kind="support" if order_type == OrderType.support else "all",
+            kind="support" if order_type == OrderType.support else "commission",
         ),
     )
     builder.adjust(1)
@@ -200,27 +195,48 @@ def admin_list_keyboard(
     page: int,
     has_next: bool,
     kind: str = "all",
+    projects: list[tuple[Order, str]] | None = None,
 ) -> InlineKeyboardMarkup:
-    """Status filters and pagination under the admin order list. Cards are sent separately."""
+    """Project rows, status filters and stable pagination controls."""
     builder = InlineKeyboardBuilder()
+    project_rows = projects or []
+    for order, customer_name in project_rows:
+        project_name = (order.project_display_name or order.idea.splitlines()[0] or str(order.id))[:28]
+        status = _label(i18n, locale, f"order.status_{order.status.value}")
+        button_text = f"{project_name} · {status} · {customer_name[:18]}"[:64]
+        builder.button(
+            text=button_text,
+            callback_data=AdminOrderCb(action="view", order_id=str(order.id)),
+        )
     for key, _status in STATUS_FILTERS:
         marker = "• " if key == current else ""
         builder.button(
             text=f"{marker}{_label(i18n, locale, f'admin.filter_{key}')}",
             callback_data=AdminListCb(status=key, page=0, kind=kind),
         )
-    nav: list[tuple[str, AdminListCb]] = []
-    if page > 0:
-        nav.append(("common.btn_prev", AdminListCb(status=current, page=page - 1, kind=kind)))
-    if has_next:
-        nav.append(("common.btn_next", AdminListCb(status=current, page=page + 1, kind=kind)))
-    for key, cb in nav:
-        builder.button(text=_label(i18n, locale, key), callback_data=cb)
-    # 7 filters in 3+3+1, then prev/next on their own row when present.
-    sizes = [3, 3, 1]
-    if nav:
-        sizes.append(len(nav))
-    builder.adjust(*sizes)
+    # Telegram has no disabled inline buttons. Edge controls use a no-op
+    # callback so the pagination row keeps a stable layout on every page.
+    previous_callback = (
+        AdminListCb(status=current, page=page - 1, kind=kind)
+        if page > 0
+        else "admin:page:noop"
+    )
+    next_callback = (
+        AdminListCb(status=current, page=page + 1, kind=kind)
+        if has_next
+        else "admin:page:noop"
+    )
+    previous_prefix = "← " if page > 0 else "· "
+    next_suffix = " →" if has_next else " ·"
+    builder.button(
+        text=f"{previous_prefix}{_label(i18n, locale, 'common.btn_prev')}",
+        callback_data=previous_callback,
+    )
+    builder.button(
+        text=f"{_label(i18n, locale, 'common.btn_next')}{next_suffix}",
+        callback_data=next_callback,
+    )
+    builder.adjust(*([1] * len(project_rows)), 3, 3, 1, 2)
     return builder.as_markup()
 
 
@@ -273,7 +289,7 @@ def progress_milestones(
     i18n: I18n,
     locale: str,
     order_id: UUID,
-    milestones: list,
+    milestones: list[MilestoneSummary],
     *,
     show_request: bool = False,
 ) -> InlineKeyboardMarkup:
@@ -285,8 +301,9 @@ def progress_milestones(
         )
     for milestone in milestones:
         due = f" · {milestone.due_on[:10]}" if milestone.due_on else ""
+        progress = f"✅ {milestone.percent}%" if milestone.percent == 100 else f"{milestone.percent}%"
         builder.button(
-            text=f"{milestone.title}{due}"[:64],
+            text=f"{progress} · {milestone.title}{due}"[:64],
             callback_data=MilestoneCb(
                 action="open",
                 order_id=str(order_id),
