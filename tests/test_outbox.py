@@ -4,11 +4,14 @@ from beerwolf_shop.application.dto import SubmitOrderDTO
 from beerwolf_shop.domain.enums import OrderStatus, OrderType
 from beerwolf_shop.infrastructure.telegram.i18n import I18n
 from beerwolf_shop.infrastructure.telegram.keyboards import AdminListCb, admin_order_card
+from beerwolf_shop.infrastructure.telegram.markdown import SafeHtml
 from beerwolf_shop.infrastructure.telegram.outbox import (
     KIND_CLOSED_ISSUE,
     KIND_NOTIFY_ADMINS,
     KIND_NOTIFY_CUSTOMER,
     deliver_outbox_event,
+    deserialize_rich_value,
+    serialize_rich_value,
 )
 
 from tests.fakes import FakeContext
@@ -35,6 +38,14 @@ def test_support_card_has_take_and_cancel_actions() -> None:
     assert any(value and "sup_cancel" in value for value in callbacks)
     back = next(value for value in callbacks if value and value.startswith("alist:"))
     assert AdminListCb.unpack(back).kind == "support"
+
+
+def test_safe_html_survives_outbox_serialization() -> None:
+    encoded = serialize_rich_value({"links": SafeHtml('<a href="https://example.com">Project</a>')})
+    decoded = deserialize_rich_value(encoded)
+    assert isinstance(decoded, dict)
+    assert isinstance(decoded["links"], SafeHtml)
+    assert decoded["links"] == '<a href="https://example.com">Project</a>'
 
 
 async def test_deliver_notify_admins_and_customer() -> None:

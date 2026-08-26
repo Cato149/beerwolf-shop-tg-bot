@@ -56,7 +56,7 @@ STATUS_FILTERS: tuple[tuple[str, OrderStatus | None], ...] = (
 
 
 def _label(i18n: I18n, locale: str, key: str, **kwargs: object) -> str:
-    # Keyboard labels are plain text (not MarkdownV2).
+    # Keyboard labels are always plain text, even when messages use rich HTML.
     return i18n.get(locale, key, **kwargs)
 
 

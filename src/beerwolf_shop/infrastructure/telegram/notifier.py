@@ -85,7 +85,7 @@ class TelegramNotifier:
             await self._bot.send_message(
                 telegram_id,
                 text,
-                parse_mode=ParseMode.MARKDOWN_V2,
+                parse_mode=ParseMode.HTML,
                 reply_markup=reply_markup,
             )
         except _RETRYABLE_TELEGRAM_ERRORS:
@@ -95,7 +95,8 @@ class TelegramNotifier:
             logger.info("Could not deliver to %s (user may not have started the bot)", telegram_id)
 
     async def notify_admins_new_order(self, order: Order, customer: User | None, locale: str = "ru") -> None:
-        username = f"@{customer.username}" if customer and customer.username else "—"
+        dash = self._i18n.get(locale, "order.dash")
+        username = f"@{customer.username}" if customer and customer.username else dash
         name = customer.display_name if customer else str(order.customer_telegram_id)
         for admin_id in self._settings.admin_telegram_ids:
             await self.send_md(
@@ -103,13 +104,13 @@ class TelegramNotifier:
                 locale,
                 "admin.new_order_notify",
                 order_id=str(order.id),
-                order_type=order.type.value,
+                order_type=self._i18n.get(locale, f"order.type_{order.type.value}"),
                 name=name,
                 username=username,
                 idea=order.idea,
-                contacts=order.extra_contacts or "—",
-                references=order.references or "—",
-                budget=order.budget or "—",
+                contacts=order.extra_contacts or dash,
+                references=order.references or dash,
+                budget=order.budget or dash,
                 reply_markup=admin_new_order_actions(order.id, self._i18n, locale, order.type),
             )
             await send_file_id_photos(self._bot, admin_id, order.photo_file_ids)
@@ -123,7 +124,11 @@ class TelegramNotifier:
         url: str,
         locale: str = "ru",
     ) -> None:
-        username = f"@{customer.username}" if customer and customer.username else "—"
+        username = (
+            f"@{customer.username}"
+            if customer and customer.username
+            else self._i18n.get(locale, "order.dash")
+        )
         for admin_id in self._settings.admin_telegram_ids:
             await self.send_md(
                 admin_id,
@@ -184,7 +189,7 @@ class TelegramNotifier:
     ) -> None:
         header = render_md(self._i18n, locale, header_key, title=title, url=url)
         try:
-            await self._bot.send_message(telegram_id, header, parse_mode=ParseMode.MARKDOWN_V2)
+            await self._bot.send_message(telegram_id, header, parse_mode=ParseMode.HTML)
             await self.send_html_with_photos(telegram_id, rendered.html, rendered.photos)
         except _RETRYABLE_TELEGRAM_ERRORS:
             raise

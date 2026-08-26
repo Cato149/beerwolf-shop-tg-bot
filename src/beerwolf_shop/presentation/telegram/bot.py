@@ -21,7 +21,7 @@ from beerwolf_shop.presentation.telegram.handlers.order_wizard import router as 
 
 
 def create_bot(settings: Settings) -> Bot:
-    return Bot(token=settings.bot_token or "0:init", default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN_V2))
+    return Bot(token=settings.bot_token or "0:init", default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
 
 def _include(dispatcher: Dispatcher, router) -> None:
