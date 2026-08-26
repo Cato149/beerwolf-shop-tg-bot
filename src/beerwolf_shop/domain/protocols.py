@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 from uuid import UUID
 
-from beerwolf_shop.domain.entities import CompletionLink, Order, User
+from beerwolf_shop.domain.entities import CompletionLink, CustomerRequestIssue, Order, User
 from beerwolf_shop.domain.enums import OrderStatus, OrderType
 
 
@@ -21,6 +22,12 @@ class UserRepository(Protocol):
 
 class OrderRepository(Protocol):
     async def get(self, order_id: UUID) -> Order | None: ...
+
+    async def get_for_update(self, order_id: UUID) -> Order | None: ...
+
+    async def lock_customer(self, telegram_id: int) -> None:
+        """Serialize active-project transitions for one Telegram customer."""
+        ...
 
     async def add(self, order: Order) -> Order: ...
 
@@ -43,6 +50,12 @@ class OrderRepository(Protocol):
 
     async def list_for_customer(self, telegram_id: int) -> list[Order]: ...
 
+    async def get_active_commission(self, telegram_id: int) -> Order | None: ...
+
+    async def get_latest_commission(self, telegram_id: int) -> Order | None: ...
+
+    async def get_active_by_project_id(self, project_id: str) -> Order | None: ...
+
     async def find_by_repo(self, owner: str, repo: str) -> list[Order]: ...
 
 
@@ -56,3 +69,19 @@ class WebhookDeliveryRepository(Protocol):
     async def claim(self, delivery_id: str) -> bool:
         """Record `delivery_id`. Return False if it was already processed."""
         ...
+
+
+class MilestoneNotificationRepository(Protocol):
+    async def claim(self, order_id: UUID, milestone_number: int) -> bool:
+        """Record a milestone notification once; return False when already recorded."""
+        ...
+
+
+class CustomerRequestIssueRepository(Protocol):
+    async def add(self, link: CustomerRequestIssue) -> None: ...
+
+    async def find_order_id(self, github_node_id: str) -> UUID | None: ...
+
+
+class RollbackRegistry(Protocol):
+    def register(self, callback: Callable[[], Awaitable[None]]) -> None: ...

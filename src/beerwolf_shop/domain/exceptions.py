@@ -21,6 +21,10 @@ class InvalidStatusTransitionError(DomainError):
     pass
 
 
+class ActiveCommissionExistsError(DomainError):
+    """The customer already has an unfinished primary commission."""
+
+
 class GithubIntegrationError(DomainError):
     pass
 

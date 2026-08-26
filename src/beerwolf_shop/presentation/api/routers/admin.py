@@ -105,6 +105,32 @@ async def change_status(
     body: StatusChangeIn,
     ctx: Annotated[AppContext, Depends(get_context)],
 ) -> OrderOut | ProjectChoiceResponse:
+    current = await ctx.get_order.execute(order_id, is_admin=True)
+    if current.type == OrderType.support:
+        if body.status == OrderStatus.in_progress:
+            order, _parent = await ctx.take_support.execute(order_id)
+            key = "customer.support_started"
+            kwargs = {"milestone": order.github_milestone_title or ""}
+        elif body.status == OrderStatus.completed:
+            order, _parent = await ctx.complete_support.execute(order_id)
+            key = "customer.support_completed"
+            kwargs = {}
+        elif body.status == OrderStatus.cancelled:
+            order, _parent = await ctx.cancel_support.execute(order_id)
+            key = "customer.support_cancelled"
+            kwargs = {}
+        else:
+            raise HTTPException(status.HTTP_409_CONFLICT, "invalid_support_transition")
+        customer = await ctx.users.get_by_telegram_id(order.customer_telegram_id)
+        locale = customer.language if customer else ctx.settings.default_locale
+        await ctx.notifier.notify_customer(
+            order.customer_telegram_id,
+            locale,
+            key,
+            refresh_menu=True,
+            **kwargs,
+        )
+        return to_order_out(order)
     if body.status == OrderStatus.spam:
         order = await ctx.mark_spam.execute(order_id)
         return to_order_out(order)
@@ -117,6 +143,7 @@ async def change_status(
             locale,
             "order.discussion_started",
             contact=ctx.settings.admin_telegram_contact,
+            refresh_menu=True,
         )
         return to_order_out(order)
     if body.status == OrderStatus.in_progress:
@@ -148,8 +175,8 @@ async def change_status(
             locale,
             "order.in_progress_started",
             project=order.project_display_name or "",
-            repo=order.github_repo_url or "",
             milestones=milestone_text,
+            refresh_menu=True,
         )
         return to_order_out(order)
     if body.status == OrderStatus.completed:
@@ -164,6 +191,8 @@ async def change_status(
             locale,
             "order.completed_customer",
             message=body.message or "",
+            links="\n".join(f"• {link.title}: {link.url}" for link in order.links),
+            refresh_menu=True,
         )
         return to_order_out(order)
     order = await ctx.change_status.execute(order_id, body.status)

@@ -54,6 +54,14 @@ class OrderOut(BaseModel):
     github_owner: str | None = Field(default=None, description="GitHub owner login.")
     github_repo: str | None = Field(default=None, description="GitHub repository name.")
     github_project_id: str | None = Field(default=None, description="Projects v2 node id.")
+    github_milestone_number: int | None = Field(
+        default=None,
+        description="Dedicated GitHub milestone number for a support ticket.",
+    )
+    github_milestone_title: str | None = Field(
+        default=None,
+        description="Dedicated GitHub milestone title for a support ticket.",
+    )
     project_display_name: str | None = Field(default=None, description="Name shown to the customer.")
     completion_message: str | None = Field(default=None, description="Extra text sent on completion.")
     created_at: datetime = Field(description="UTC creation timestamp.")
@@ -121,20 +129,38 @@ class OrderListResponse(BaseModel):
     total: int = Field(description="Total matching rows.")
 
 
+class MilestoneSummaryOut(BaseModel):
+    number: int = Field(description="Repository milestone number.")
+    title: str = Field(description="Milestone title.")
+    due_on: str | None = Field(default=None, description="GitHub due date, if configured.")
+
+
+class MilestoneTaskOut(BaseModel):
+    number: int = Field(description="GitHub issue number.")
+    title: str = Field(description="Task title.")
+    status: str = Field(description="Projects v2 status, or Open/Done fallback.")
+    due_on: str | None = Field(default=None, description="Projects v2 due date, if configured.")
+
+
+class MilestoneDetailsOut(BaseModel):
+    number: int = Field(description="Repository milestone number.")
+    title: str = Field(description="Milestone title.")
+    due_on: str | None = Field(default=None, description="Milestone due date, if configured.")
+    tasks: list[MilestoneTaskOut] = Field(description="Issues assigned to the milestone.")
+
+
 class ProgressOut(BaseModel):
     total: int = Field(description="Total tasks counted.")
     done: int = Field(description="Completed tasks.")
     percent: int = Field(description="Completion percent 0-100.")
     bar: str = Field(description="Text progress bar using ▓ and ░.")
     in_progress: list[str] = Field(description="Tasks currently in progress, with due dates when known.")
-    current_milestone: str | None = Field(default=None, description="Nearest open milestone.")
-    next_milestone: str | None = Field(default=None, description="Following open milestone.")
+    milestones: list[MilestoneSummaryOut] = Field(description="Open milestones available for drill-down.")
     source: str = Field(description="`project` if Projects v2 was used, otherwise `repo` issues.")
 
 
 class CustomerRequestIn(BaseModel):
-    title: str = Field(description="GitHub issue title.")
-    body: str = Field(description="GitHub issue body in Markdown.")
+    wish: str = Field(description="Customer's requested change. The Issue title is derived automatically.")
 
 
 class CustomerRequestOut(BaseModel):
@@ -143,6 +169,3 @@ class CustomerRequestOut(BaseModel):
 
 class SupportCreateIn(BaseModel):
     idea: str = Field(description="What needs a fix or follow-up.")
-    extra_contacts: str | None = Field(default=None, description="Optional extra contacts.")
-    references: str | None = Field(default=None, description="Optional references.")
-    budget: str | None = Field(default=None, description="Optional budget.")

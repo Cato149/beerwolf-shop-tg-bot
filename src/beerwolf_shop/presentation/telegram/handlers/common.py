@@ -18,6 +18,13 @@ from beerwolf_shop.presentation.telegram.context import AppContext
 router = Router(name="common")
 
 
+async def build_main_menu(ctx: AppContext, user: User, locale: str, is_admin: bool):
+    """Render the persistent keyboard from the customer's current primary project."""
+
+    project = await ctx.get_customer_project.execute(user.telegram_id)
+    return main_menu(ctx.i18n, locale, is_admin=is_admin, project=project)
+
+
 class LocaleText(Filter):
     """Match a reply-keyboard label from any locale catalog, not a hardcoded string."""
 
@@ -54,7 +61,7 @@ async def cmd_start(
     await message.answer(
         render_md(ctx.i18n, locale, "common.start", name=user.display_name),
         parse_mode="MarkdownV2",
-        reply_markup=main_menu(ctx.i18n, locale, is_admin=is_admin),
+        reply_markup=await build_main_menu(ctx, user, locale, is_admin),
     )
 
 
@@ -88,16 +95,23 @@ async def set_language(
         await query.message.answer(
             render_md(ctx.i18n, locale, "common.language_changed"),
             parse_mode="MarkdownV2",
-            reply_markup=main_menu(ctx.i18n, locale, is_admin=is_admin),
+            reply_markup=await build_main_menu(ctx, updated, locale, is_admin),
         )
 
 
 @router.message(LocaleText("common.btn_cancel"))
 @router.message(Command("cancel"))
-async def cmd_cancel(message: Message, ctx: AppContext, locale: str, is_admin: bool, state: FSMContext) -> None:
+async def cmd_cancel(
+    message: Message,
+    ctx: AppContext,
+    user: User,
+    locale: str,
+    is_admin: bool,
+    state: FSMContext,
+) -> None:
     await state.clear()
     await message.answer(
         render_md(ctx.i18n, locale, "common.cancelled"),
         parse_mode="MarkdownV2",
-        reply_markup=main_menu(ctx.i18n, locale, is_admin=is_admin),
+        reply_markup=await build_main_menu(ctx, user, locale, is_admin),
     )

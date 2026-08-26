@@ -2,7 +2,11 @@ import pytest
 
 from beerwolf_shop.application.dto import CompleteOrderDTO, LinkGithubDTO, SubmitOrderDTO
 from beerwolf_shop.domain.enums import OrderStatus, OrderType
-from beerwolf_shop.domain.exceptions import GithubIntegrationError, InvalidStatusTransitionError
+from beerwolf_shop.domain.exceptions import (
+    ActiveCommissionExistsError,
+    GithubIntegrationError,
+    InvalidStatusTransitionError,
+)
 
 from tests.fakes import FakeContext
 
@@ -24,6 +28,16 @@ async def test_submit_and_spam_does_not_change_customer_flow() -> None:
     assert user.display_name == "Wolf"
     spam = await ctx.mark_spam.execute(order.id)
     assert spam.status == OrderStatus.spam
+
+
+@pytest.mark.asyncio
+async def test_customer_cannot_submit_second_active_commission() -> None:
+    ctx = FakeContext()
+    await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=42, display_name="Wolf", idea="First"))
+    with pytest.raises(ActiveCommissionExistsError):
+        await ctx.submit_order.execute(
+            SubmitOrderDTO(customer_telegram_id=42, display_name="Wolf", idea="Second")
+        )
 
 
 @pytest.mark.asyncio
@@ -75,6 +89,42 @@ async def test_support_ticket_links_parent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_support_take_and_complete_reopens_and_closes_parent() -> None:
+    ctx = FakeContext()
+    parent = await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=9, display_name="A", idea="game"))
+    parent.status = OrderStatus.completed
+    parent.github_owner = "acme"
+    parent.github_repo = "shop"
+    parent.github_repo_url = "https://github.com/acme/shop"
+    await ctx.orders.save(parent)
+    ticket, _ = await ctx.create_support.execute(parent.id, 9, "fix collision")
+
+    active_ticket, active_parent = await ctx.take_support.execute(ticket.id)
+    assert active_ticket.status == OrderStatus.in_progress
+    assert active_ticket.github_milestone_number is not None
+    assert active_parent.status == OrderStatus.in_progress
+
+    done_ticket, done_parent = await ctx.complete_support.execute(ticket.id)
+    assert done_ticket.status == OrderStatus.completed
+    assert done_parent.status == OrderStatus.completed
+    milestone = await ctx.github.get_milestone("acme", "shop", active_ticket.github_milestone_number)
+    assert milestone.state == "closed"
+
+
+@pytest.mark.asyncio
+async def test_cancel_support_keeps_parent_completed() -> None:
+    ctx = FakeContext()
+    parent = await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=10, display_name="A", idea="game"))
+    parent.status = OrderStatus.completed
+    await ctx.orders.save(parent)
+    ticket, _ = await ctx.create_support.execute(parent.id, 10, "not needed")
+
+    cancelled, stored_parent = await ctx.cancel_support.execute(ticket.id)
+    assert cancelled.status == OrderStatus.cancelled
+    assert stored_parent.status == OrderStatus.completed
+
+
+@pytest.mark.asyncio
 async def test_in_progress_requires_discussion() -> None:
     ctx = FakeContext()
     order = await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=1, display_name="A", idea="logo"))
@@ -99,7 +149,8 @@ async def test_customer_request_survives_project_add_failure() -> None:
         LinkGithubDTO(order_id=order.id, repo_url="https://github.com/acme/shop", project_display_name="Shop")
     )
     ctx.github.add_project_error = GithubIntegrationError("github_project_add_failed")
-    url = await ctx.create_request.execute(
-        CustomerRequestDTO(order_id=linked.id, title="Bigger ears", body="pls", actor_telegram_id=5)
+    issue = await ctx.create_request.execute(
+        CustomerRequestDTO(order_id=linked.id, wish="Bigger ears\npls", actor_telegram_id=5)
     )
-    assert url.endswith("/issues/1")
+    assert issue.html_url.endswith("/issues/1")
+    assert await ctx.request_issues.find_order_id(issue.node_id) == linked.id

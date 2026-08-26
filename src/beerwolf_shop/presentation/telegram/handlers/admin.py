@@ -160,7 +160,7 @@ async def _show_admin_card(message: Message, ctx: AppContext, locale: str, order
     await message.answer(
         text,
         parse_mode="MarkdownV2",
-        reply_markup=admin_order_kb(order.id, order.status, ctx.i18n, locale),
+        reply_markup=admin_order_kb(order.id, order.status, ctx.i18n, locale, order.type),
     )
 
 
@@ -219,10 +219,105 @@ async def start_discussion(
         customer_locale,
         "order.discussion_started",
         contact=ctx.settings.admin_telegram_contact,
+        refresh_menu=True,
     )
     await query.answer()
     if query.message:
         await query.message.answer(render_md(ctx.i18n, locale, "admin.discussion_marked"), parse_mode="MarkdownV2")
+
+
+@router.callback_query(AdminOrderCb.filter(F.action == "sup_take"))
+async def take_support(
+    query: CallbackQuery,
+    callback_data: AdminOrderCb,
+    ctx: AppContext,
+    locale: str,
+    is_admin: bool,
+) -> None:
+    if not await _require_admin(query, is_admin):
+        return
+    try:
+        ticket, parent = await ctx.take_support.execute(UUID(callback_data.order_id))
+    except DomainError:
+        await query.answer(ctx.i18n.get(locale, "common.error_generic"), show_alert=True)
+        return
+    customer = await ctx.users.get_by_telegram_id(ticket.customer_telegram_id)
+    customer_locale = customer.language if customer else ctx.settings.default_locale
+    await ctx.notifier.notify_customer(
+        ticket.customer_telegram_id,
+        customer_locale,
+        "customer.support_started",
+        milestone=ticket.github_milestone_title or "",
+        refresh_menu=True,
+    )
+    await query.answer()
+    if query.message:
+        await query.message.answer(
+            render_md(
+                ctx.i18n,
+                locale,
+                "admin.support_started",
+                project=parent.project_display_name or "",
+                milestone=ticket.github_milestone_title or "",
+            ),
+            parse_mode="MarkdownV2",
+        )
+
+
+@router.callback_query(AdminOrderCb.filter(F.action == "sup_cancel"))
+async def cancel_support(
+    query: CallbackQuery,
+    callback_data: AdminOrderCb,
+    ctx: AppContext,
+    locale: str,
+    is_admin: bool,
+) -> None:
+    if not await _require_admin(query, is_admin):
+        return
+    try:
+        ticket, _parent = await ctx.cancel_support.execute(UUID(callback_data.order_id))
+    except DomainError:
+        await query.answer(ctx.i18n.get(locale, "common.error_generic"), show_alert=True)
+        return
+    customer = await ctx.users.get_by_telegram_id(ticket.customer_telegram_id)
+    customer_locale = customer.language if customer else ctx.settings.default_locale
+    await ctx.notifier.notify_customer(
+        ticket.customer_telegram_id,
+        customer_locale,
+        "customer.support_cancelled",
+        refresh_menu=True,
+    )
+    await query.answer()
+    if query.message:
+        await query.message.answer(render_md(ctx.i18n, locale, "admin.support_cancelled"), parse_mode="MarkdownV2")
+
+
+@router.callback_query(AdminOrderCb.filter(F.action == "sup_done"))
+async def complete_support(
+    query: CallbackQuery,
+    callback_data: AdminOrderCb,
+    ctx: AppContext,
+    locale: str,
+    is_admin: bool,
+) -> None:
+    if not await _require_admin(query, is_admin):
+        return
+    try:
+        ticket, _parent = await ctx.complete_support.execute(UUID(callback_data.order_id))
+    except DomainError:
+        await query.answer(ctx.i18n.get(locale, "common.error_generic"), show_alert=True)
+        return
+    customer = await ctx.users.get_by_telegram_id(ticket.customer_telegram_id)
+    customer_locale = customer.language if customer else ctx.settings.default_locale
+    await ctx.notifier.notify_customer(
+        ticket.customer_telegram_id,
+        customer_locale,
+        "customer.support_completed",
+        refresh_menu=True,
+    )
+    await query.answer()
+    if query.message:
+        await query.message.answer(render_md(ctx.i18n, locale, "admin.support_completed"), parse_mode="MarkdownV2")
 
 
 @router.callback_query(AdminOrderCb.filter(F.action == "ip"))
@@ -313,8 +408,8 @@ async def _finish_link(
         customer_locale,
         "order.in_progress_started",
         project=order.project_display_name or "",
-        repo=order.github_repo_url or "",
         milestones=milestone_text,
+        refresh_menu=True,
     )
     await state.clear()
     await message.answer(
@@ -323,7 +418,6 @@ async def _finish_link(
             locale,
             "order.in_progress_started",
             project=order.project_display_name or "",
-            repo=order.github_repo_url or "",
             milestones=milestone_text,
         ),
         parse_mode="MarkdownV2",
@@ -448,10 +542,18 @@ async def got_complete_message(
         customer_locale,
         "order.completed_customer",
         message=extra or "",
+        links="\n".join(f"• {link.title}: {link.url}" for link in order.links),
+        refresh_menu=True,
     )
     await state.clear()
     await message.answer(
-        render_md(ctx.i18n, locale, "order.completed_customer", message=extra or ""),
+        render_md(
+            ctx.i18n,
+            locale,
+            "order.completed_customer",
+            message=extra or "",
+            links="\n".join(f"• {link.title}: {link.url}" for link in order.links),
+        ),
         parse_mode="MarkdownV2",
         reply_markup=main_menu(ctx.i18n, locale, is_admin=is_admin),
     )

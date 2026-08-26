@@ -13,6 +13,7 @@ class OrderStatus(StrEnum):
     discussion = "discussion"
     in_progress = "in_progress"
     completed = "completed"
+    cancelled = "cancelled"
     spam = "spam"
 
 

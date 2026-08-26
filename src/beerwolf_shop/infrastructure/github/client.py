@@ -42,6 +42,7 @@ class GithubProject:
 
 @dataclass(slots=True)
 class GithubMilestone:
+    number: int
     title: str
     due_on: str | None
     open_issues: int
@@ -64,6 +65,9 @@ class GithubIssue:
 
 @dataclass(slots=True)
 class ProjectItem:
+    number: int
+    node_id: str
+    repo_full_name: str
     title: str
     state: str
     status: str | None
@@ -210,6 +214,7 @@ class GithubClient:
         for item in self._json(response):
             result.append(
                 GithubMilestone(
+                    number=item["number"],
                     title=item["title"],
                     due_on=item.get("due_on"),
                     open_issues=item.get("open_issues", 0),
@@ -219,6 +224,76 @@ class GithubClient:
             )
         result.sort(key=lambda m: (m.due_on is None, m.due_on or "", m.title.lower()))
         return result
+
+    async def get_milestone(self, owner: str, repo: str, number: int) -> GithubMilestone:
+        response = await self._rest(
+            "GET",
+            f"/repos/{owner}/{repo}/milestones/{number}",
+            allowed=(200,),
+        )
+        item = self._json(response)
+        return GithubMilestone(
+            number=item["number"],
+            title=item["title"],
+            due_on=item.get("due_on"),
+            open_issues=item.get("open_issues", 0),
+            closed_issues=item.get("closed_issues", 0),
+            state=item.get("state", "open"),
+        )
+
+    async def create_milestone(self, owner: str, repo: str, title: str) -> GithubMilestone:
+        response = await self._rest(
+            "POST",
+            f"/repos/{owner}/{repo}/milestones",
+            json={"title": title},
+            allowed=(201,),
+        )
+        item = self._json(response)
+        return GithubMilestone(
+            number=item["number"],
+            title=item["title"],
+            due_on=item.get("due_on"),
+            open_issues=item.get("open_issues", 0),
+            closed_issues=item.get("closed_issues", 0),
+            state=item.get("state", "open"),
+        )
+
+    async def close_milestone(self, owner: str, repo: str, number: int) -> None:
+        await self.set_milestone_state(owner, repo, number, "closed")
+
+    async def set_milestone_state(self, owner: str, repo: str, number: int, state: str) -> None:
+        await self._rest(
+            "PATCH",
+            f"/repos/{owner}/{repo}/milestones/{number}",
+            json={"state": state},
+            allowed=(200,),
+        )
+
+    async def delete_milestone(self, owner: str, repo: str, number: int) -> None:
+        await self._rest(
+            "DELETE",
+            f"/repos/{owner}/{repo}/milestones/{number}",
+            allowed=(204,),
+        )
+
+    async def list_milestone_issues(self, owner: str, repo: str, number: int) -> list[GithubIssue]:
+        issues: list[GithubIssue] = []
+        page = 1
+        while page <= 5:
+            response = await self._rest(
+                "GET",
+                f"/repos/{owner}/{repo}/issues",
+                params={"state": "all", "milestone": number, "per_page": 100, "page": page},
+                allowed=(200,),
+            )
+            batch = self._json(response)
+            if not batch:
+                break
+            issues.extend(self._issue_from_rest(item) for item in batch if "pull_request" not in item)
+            if len(batch) < 100:
+                break
+            page += 1
+        return issues
 
     async def list_repo_issues(self, owner: str, repo: str) -> list[GithubIssue]:
         issues: list[GithubIssue] = []
@@ -297,6 +372,14 @@ class GithubClient:
             json={"title": title, "body": body, "labels": labels or []},
         )
         return self._issue_from_rest(self._json(response))
+
+    async def set_issue_state(self, owner: str, repo: str, number: int, state: str) -> None:
+        await self._rest(
+            "PATCH",
+            f"/repos/{owner}/{repo}/issues/{number}",
+            json={"state": state},
+            allowed=(200,),
+        )
 
     async def ensure_issues_webhook(self, owner: str, repo: str, hook_url: str, secret: str) -> None:
         """Idempotently register an `issues` webhook pointing at this app."""
@@ -444,9 +527,12 @@ class GithubClient:
                           }
                           content {
                             ... on Issue {
+                              id
+                              number
                               title
                               state
                               closed
+                              repository { nameWithOwner }
                               milestone { title dueOn }
                             }
                           }
@@ -485,6 +571,9 @@ class GithubClient:
                 due = value.get("date")
         milestone = content.get("milestone") or {}
         return ProjectItem(
+            number=int(content.get("number") or 0),
+            node_id=content.get("id") or "",
+            repo_full_name=(content.get("repository") or {}).get("nameWithOwner") or "",
             title=content.get("title") or "",
             state=content.get("state") or "OPEN",
             status=status,

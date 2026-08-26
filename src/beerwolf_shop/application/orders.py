@@ -9,6 +9,7 @@ from beerwolf_shop.domain.entities import CompletionLink, Order, User
 from beerwolf_shop.domain.enums import OrderStatus, OrderType
 from beerwolf_shop.domain.exceptions import (
     AccessDeniedError,
+    ActiveCommissionExistsError,
     InvalidStatusTransitionError,
     OrderNotFoundError,
     UserNotFoundError,
@@ -20,6 +21,7 @@ ALLOWED_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
     OrderStatus.discussion: {OrderStatus.in_progress, OrderStatus.spam, OrderStatus.application},
     OrderStatus.in_progress: {OrderStatus.completed, OrderStatus.discussion},
     OrderStatus.completed: set(),
+    OrderStatus.cancelled: set(),
     OrderStatus.spam: {OrderStatus.application},
 }
 
@@ -48,6 +50,11 @@ class SubmitOrder:
         self._orders = orders
 
     async def execute(self, dto: SubmitOrderDTO) -> Order:
+        if dto.order_type == OrderType.commission:
+            await self._orders.lock_customer(dto.customer_telegram_id)
+            active = await self._orders.get_active_commission(dto.customer_telegram_id)
+            if active is not None:
+                raise ActiveCommissionExistsError(str(active.id))
         user = await self._users.get_by_telegram_id(dto.customer_telegram_id)
         if user is None:
             user = User(
@@ -144,6 +151,19 @@ class ListCustomerOrders:
 
     async def execute(self, telegram_id: int) -> list[Order]:
         return await self._orders.list_for_customer(telegram_id)
+
+
+class GetCustomerProject:
+    """Return the unfinished commission, or the latest completed commission."""
+
+    def __init__(self, orders: OrderRepository) -> None:
+        self._orders = orders
+
+    async def execute(self, telegram_id: int) -> Order | None:
+        active = await self._orders.get_active_commission(telegram_id)
+        if active is not None:
+            return active
+        return await self._orders.get_latest_commission(telegram_id)
 
 
 class ChangeStatus:

@@ -8,7 +8,8 @@ from uuid import UUID
 from beerwolf_shop.application.github import (
     BuildProgress,
     CreateCustomerRequest,
-    HandleIssueClosed,
+    GetMilestoneDetails,
+    HandleGithubIssueEvent,
     ListRepoProjects,
     StartInProgress,
 )
@@ -16,6 +17,7 @@ from beerwolf_shop.application.orders import (
     ChangeStatus,
     CompleteOrder,
     CreateManualOrder,
+    GetCustomerProject,
     GetOrder,
     ListCustomerOrders,
     ListOrders,
@@ -23,11 +25,16 @@ from beerwolf_shop.application.orders import (
     StartDiscussion,
     SubmitOrder,
 )
-from beerwolf_shop.application.support import CreateSupportTicket
+from beerwolf_shop.application.support import (
+    CancelSupportTicket,
+    CompleteSupportTicket,
+    CreateSupportTicket,
+    TakeSupportTicket,
+)
 from beerwolf_shop.application.users import SetLanguage, UpsertUser
 from beerwolf_shop.config import BotMode, Settings
-from beerwolf_shop.domain.entities import CompletionLink, Order, User
-from beerwolf_shop.domain.enums import OrderStatus, OrderType
+from beerwolf_shop.domain.entities import CompletionLink, CustomerRequestIssue, Order, User
+from beerwolf_shop.domain.enums import ACTIVE_CUSTOMER_STATUSES, OrderStatus, OrderType
 from beerwolf_shop.infrastructure.github.client import (
     GithubIssue,
     GithubMilestone,
@@ -85,6 +92,12 @@ class FakeOrderRepo:
     async def get(self, order_id: UUID) -> Order | None:
         return self.items.get(order_id)
 
+    async def get_for_update(self, order_id: UUID) -> Order | None:
+        return self.items.get(order_id)
+
+    async def lock_customer(self, telegram_id: int) -> None:
+        _ = telegram_id
+
     async def add(self, order: Order) -> Order:
         self.items[order.id] = order
         return order
@@ -119,6 +132,38 @@ class FakeOrderRepo:
     async def list_for_customer(self, telegram_id: int) -> list[Order]:
         return [o for o in self.items.values() if o.customer_telegram_id == telegram_id]
 
+    async def get_active_commission(self, telegram_id: int) -> Order | None:
+        rows = [
+            order
+            for order in self.items.values()
+            if order.customer_telegram_id == telegram_id
+            and order.type == OrderType.commission
+            and order.status in ACTIVE_CUSTOMER_STATUSES
+        ]
+        return max(rows, key=lambda order: order.created_at) if rows else None
+
+    async def get_latest_commission(self, telegram_id: int) -> Order | None:
+        rows = [
+            order
+            for order in self.items.values()
+            if order.customer_telegram_id == telegram_id
+            and order.type == OrderType.commission
+            and order.status not in {OrderStatus.spam, OrderStatus.cancelled}
+        ]
+        return max(rows, key=lambda order: order.created_at) if rows else None
+
+    async def get_active_by_project_id(self, project_id: str) -> Order | None:
+        return next(
+            (
+                order
+                for order in self.items.values()
+                if order.github_project_id == project_id
+                and order.type == OrderType.commission
+                and order.status in ACTIVE_CUSTOMER_STATUSES
+            ),
+            None,
+        )
+
     async def find_by_repo(self, owner: str, repo: str) -> list[Order]:
         owner_key = owner.lower()
         repo_key = repo.lower()
@@ -151,13 +196,51 @@ class FakeDeliveryRepo:
         return True
 
 
+class FakeMilestoneNotificationRepo:
+    def __init__(self) -> None:
+        self.ids: set[tuple[UUID, int]] = set()
+
+    async def claim(self, order_id: UUID, milestone_number: int) -> bool:
+        key = (order_id, milestone_number)
+        if key in self.ids:
+            return False
+        self.ids.add(key)
+        return True
+
+
+class FakeCustomerRequestIssueRepo:
+    def __init__(self) -> None:
+        self.items: dict[str, CustomerRequestIssue] = {}
+
+    async def add(self, link: CustomerRequestIssue) -> None:
+        self.items[link.github_node_id] = link
+
+    async def find_order_id(self, github_node_id: str) -> UUID | None:
+        link = self.items.get(github_node_id)
+        return link.order_id if link else None
+
+
 class FakeGithub:
     def __init__(self) -> None:
         self.repo = GithubRepo(owner="acme", name="shop", url="https://github.com/acme/shop", node_id="R_1")
         self.projects = [GithubProject(id="PVT_1", title="Board")]
         self.milestones = [
-            GithubMilestone(title="v1", due_on="2026-09-01T00:00:00Z", open_issues=1, closed_issues=0, state="open"),
-            GithubMilestone(title="v2", due_on="2026-10-01T00:00:00Z", open_issues=2, closed_issues=0, state="open"),
+            GithubMilestone(
+                number=1,
+                title="v1",
+                due_on="2026-09-01T00:00:00Z",
+                open_issues=1,
+                closed_issues=0,
+                state="open",
+            ),
+            GithubMilestone(
+                number=2,
+                title="v2",
+                due_on="2026-10-01T00:00:00Z",
+                open_issues=2,
+                closed_issues=0,
+                state="open",
+            ),
         ]
         self.issues: list[GithubIssue] = []
         self.created: list[dict[str, Any]] = []
@@ -165,6 +248,9 @@ class FakeGithub:
         self.labels: set[str] = set()
         self.project_items: list[ProjectItem] = [
             ProjectItem(
+                number=1,
+                node_id="I_1",
+                repo_full_name="acme/shop",
                 title="Draw UI",
                 state="OPEN",
                 status="In Progress",
@@ -174,6 +260,9 @@ class FakeGithub:
                 is_closed=False,
             ),
             ProjectItem(
+                number=2,
+                node_id="I_2",
+                repo_full_name="acme/shop",
                 title="Done task",
                 state="CLOSED",
                 status="Done",
@@ -192,6 +281,35 @@ class FakeGithub:
 
     async def list_milestones(self, owner: str, repo: str) -> list[GithubMilestone]:
         return list(self.milestones)
+
+    async def get_milestone(self, owner: str, repo: str, number: int) -> GithubMilestone:
+        return next(item for item in self.milestones if item.number == number)
+
+    async def create_milestone(self, owner: str, repo: str, title: str) -> GithubMilestone:
+        milestone = GithubMilestone(
+            number=max((item.number for item in self.milestones), default=0) + 1,
+            title=title,
+            due_on=None,
+            open_issues=0,
+            closed_issues=0,
+            state="open",
+        )
+        self.milestones.append(milestone)
+        return milestone
+
+    async def close_milestone(self, owner: str, repo: str, number: int) -> None:
+        await self.set_milestone_state(owner, repo, number, "closed")
+
+    async def set_milestone_state(self, owner: str, repo: str, number: int, state: str) -> None:
+        milestone = await self.get_milestone(owner, repo, number)
+        milestone.state = state
+
+    async def delete_milestone(self, owner: str, repo: str, number: int) -> None:
+        self.milestones = [item for item in self.milestones if item.number != number]
+
+    async def list_milestone_issues(self, owner: str, repo: str, number: int) -> list[GithubIssue]:
+        title = (await self.get_milestone(owner, repo, number)).title
+        return [issue for issue in self.issues if issue.milestone_title == title]
 
     async def list_repo_issues(self, owner: str, repo: str) -> list[GithubIssue]:
         return list(self.issues)
@@ -219,6 +337,11 @@ class FakeGithub:
         self.created.append({"title": title, "body": body, "labels": labels})
         return issue
 
+    async def set_issue_state(self, owner: str, repo: str, number: int, state: str) -> None:
+        for issue in self.issues:
+            if issue.number == number:
+                issue.state = state
+
     async def add_issue_to_project(self, project_id: str, content_id: str) -> str:
         if getattr(self, "add_project_error", None):
             raise self.add_project_error
@@ -237,17 +360,50 @@ class FakeGithub:
 class FakeNotifier:
     def __init__(self) -> None:
         self.admin: list[tuple] = []
+        self.admin_requests: list[tuple] = []
         self.customer: list[tuple] = []
-        self.closed: list[tuple] = []
+        self.issue_updates: list[tuple] = []
 
     async def notify_admins_new_order(self, order: Order, customer: User | None, locale: str = "ru") -> None:
         self.admin.append((order.id, customer, locale))
 
-    async def notify_customer(self, telegram_id: int, locale: str, key: str, **kwargs: object) -> None:
+    async def notify_admins_customer_request(
+        self,
+        order: Order,
+        customer: User | None,
+        title: str,
+        wish: str,
+        url: str,
+        locale: str = "ru",
+    ) -> None:
+        self.admin_requests.append((order.id, customer, title, wish, url, locale))
+
+    async def notify_customer(
+        self,
+        telegram_id: int,
+        locale: str,
+        key: str,
+        *,
+        refresh_menu: bool = False,
+        reply_markup=None,
+        **kwargs: object,
+    ) -> None:
+        _ = (refresh_menu, reply_markup)
         self.customer.append((telegram_id, locale, key, kwargs))
 
-    async def send_closed_issue(self, telegram_id: int, locale: str, title: str, url: str, rendered: object) -> None:
-        self.closed.append((telegram_id, title, url))
+    def customer_menu(self, telegram_id: int, locale: str, project: Order | None):
+        return {"telegram_id": telegram_id, "locale": locale, "project": project}
+
+    async def send_issue_update(
+        self,
+        telegram_id: int,
+        locale: str,
+        header_key: str,
+        title: str,
+        url: str,
+        rendered: object,
+    ) -> None:
+        self.issue_updates.append((telegram_id, header_key, title, url))
 
 
 class FakeContext:
@@ -260,12 +416,15 @@ class FakeContext:
         self.orders = FakeOrderRepo()
         self.links = FakeLinkRepo()
         self.deliveries = FakeDeliveryRepo()
+        self.milestone_notifications = FakeMilestoneNotificationRepo()
+        self.request_issues = FakeCustomerRequestIssueRepo()
         self.upsert_user = UpsertUser(self.users, self.settings.default_locale)
         self.set_language = SetLanguage(self.users)
         self.submit_order = SubmitOrder(self.users, self.orders)
         self.create_manual = CreateManualOrder(self.users, self.orders)
         self.list_orders = ListOrders(self.orders)
         self.get_order = GetOrder(self.orders, self.links)
+        self.get_customer_project = GetCustomerProject(self.orders)
         self.list_customer_orders = ListCustomerOrders(self.orders)
         self.change_status = ChangeStatus(self.orders)
         self.mark_spam = MarkSpam(self.orders)
@@ -274,6 +433,21 @@ class FakeContext:
         self.list_projects = ListRepoProjects(self.github)
         self.start_in_progress = StartInProgress(self.orders, self.github, self.settings)
         self.build_progress = BuildProgress(self.orders, self.github, self.settings)
-        self.create_request = CreateCustomerRequest(self.orders, self.github, self.settings)
-        self.handle_issue_closed = HandleIssueClosed(self.orders, self.deliveries, self.github)
+        self.get_milestone_details = GetMilestoneDetails(self.orders, self.github)
+        self.create_request = CreateCustomerRequest(
+            self.orders,
+            self.request_issues,
+            self.github,
+            self.settings,
+        )
+        self.handle_github_issue_event = HandleGithubIssueEvent(
+            self.orders,
+            self.deliveries,
+            self.milestone_notifications,
+            self.request_issues,
+            self.github,
+        )
         self.create_support = CreateSupportTicket(self.users, self.orders)
+        self.take_support = TakeSupportTicket(self.orders, self.github)
+        self.cancel_support = CancelSupportTicket(self.orders)
+        self.complete_support = CompleteSupportTicket(self.orders, self.github)

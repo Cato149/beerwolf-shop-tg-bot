@@ -6,7 +6,13 @@ from uuid import UUID, uuid4
 from sqlalchemy import JSON, BigInteger, Column, DateTime, Integer, Text, UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
 
-from beerwolf_shop.domain.entities import CompletionLink, Order, User
+from beerwolf_shop.domain.entities import (
+    CompletionLink,
+    CustomerRequestIssue,
+    MilestoneNotification,
+    Order,
+    User,
+)
 from beerwolf_shop.domain.enums import OrderStatus, OrderType
 
 
@@ -71,6 +77,8 @@ class OrderTable(SQLModel, table=True):
     github_owner: str | None = Field(default=None, index=True)
     github_repo: str | None = Field(default=None, index=True)
     github_project_id: str | None = None
+    github_milestone_number: int | None = Field(default=None, index=True)
+    github_milestone_title: str | None = None
     project_display_name: str | None = None
     completion_message: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     created_at: datetime = Field(default_factory=_utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
@@ -100,6 +108,8 @@ class OrderTable(SQLModel, table=True):
             github_owner=self.github_owner,
             github_repo=self.github_repo,
             github_project_id=self.github_project_id,
+            github_milestone_number=self.github_milestone_number,
+            github_milestone_title=self.github_milestone_title,
             project_display_name=self.project_display_name,
             completion_message=self.completion_message,
             created_at=self.created_at,
@@ -123,6 +133,8 @@ class OrderTable(SQLModel, table=True):
             github_owner=order.github_owner,
             github_repo=order.github_repo,
             github_project_id=order.github_project_id,
+            github_milestone_number=order.github_milestone_number,
+            github_milestone_title=order.github_milestone_title,
             project_display_name=order.project_display_name,
             completion_message=order.completion_message,
             created_at=order.created_at,
@@ -142,6 +154,8 @@ class OrderTable(SQLModel, table=True):
         self.github_owner = order.github_owner
         self.github_repo = order.github_repo
         self.github_project_id = order.github_project_id
+        self.github_milestone_number = order.github_milestone_number
+        self.github_milestone_title = order.github_milestone_title
         self.project_display_name = order.project_display_name
         self.completion_message = order.completion_message
         self.updated_at = order.updated_at
@@ -215,6 +229,51 @@ class WebhookDeliveryTable(SQLModel, table=True):
 
     delivery_id: str = Field(primary_key=True, max_length=128)
     created_at: datetime = Field(default_factory=_utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
+
+
+class MilestoneNotificationTable(SQLModel, table=True):
+    """Milestone completion notifications already emitted for an order."""
+
+    __tablename__ = "milestone_notifications"
+    __table_args__ = (
+        UniqueConstraint(
+            "order_id",
+            "github_milestone_number",
+            name="uq_milestone_notifications_order_number",
+        ),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    order_id: UUID = Field(foreign_key="orders.id", index=True)
+    github_milestone_number: int = Field(sa_column=Column(Integer, nullable=False))
+    created_at: datetime = Field(default_factory=_utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
+
+    def to_domain(self) -> MilestoneNotification:
+        return MilestoneNotification(
+            id=self.id,
+            order_id=self.order_id,
+            github_milestone_number=self.github_milestone_number,
+            created_at=self.created_at,
+        )
+
+
+class CustomerRequestIssueTable(SQLModel, table=True):
+    """Maps a customer-created GitHub issue back to its exact order."""
+
+    __tablename__ = "customer_request_issues"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    order_id: UUID = Field(foreign_key="orders.id", index=True)
+    github_node_id: str = Field(index=True)
+    created_at: datetime = Field(default_factory=_utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
+
+    def to_domain(self) -> CustomerRequestIssue:
+        return CustomerRequestIssue(
+            id=self.id,
+            order_id=self.order_id,
+            github_node_id=self.github_node_id,
+            created_at=self.created_at,
+        )
 
 
 class OutboxEventTable(SQLModel, table=True):

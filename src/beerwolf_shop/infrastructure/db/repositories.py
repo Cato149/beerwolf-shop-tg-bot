@@ -7,10 +7,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from beerwolf_shop.domain.entities import CompletionLink, Order, User
-from beerwolf_shop.domain.enums import OrderStatus, OrderType
+from beerwolf_shop.domain.entities import CompletionLink, CustomerRequestIssue, Order, User
+from beerwolf_shop.domain.enums import ACTIVE_CUSTOMER_STATUSES, OrderStatus, OrderType
+from beerwolf_shop.domain.exceptions import ActiveCommissionExistsError
 from beerwolf_shop.infrastructure.db.models import (
     CompletionLinkTable,
+    CustomerRequestIssueTable,
+    MilestoneNotificationTable,
     OrderTable,
     OutboxEventTable,
     UserTable,
@@ -60,10 +63,31 @@ class SqlOrderRepository:
         row = result.scalars().first()
         return row.to_domain() if row else None
 
+    async def get_for_update(self, order_id: UUID) -> Order | None:
+        result = await self._session.execute(
+            select(OrderTable)
+            .options(selectinload(OrderTable.links))
+            .where(OrderTable.id == order_id)
+            .with_for_update()
+        )
+        row = result.scalars().first()
+        return row.to_domain() if row else None
+
+    async def lock_customer(self, telegram_id: int) -> None:
+        # The transaction-level advisory lock also serializes new-order creation
+        # against reopening a completed parent for support.
+        await self._session.execute(select(func.pg_advisory_xact_lock(telegram_id)))
+
     async def add(self, order: Order) -> Order:
         row = OrderTable.from_domain(order)
-        self._session.add(row)
-        await self._session.flush()
+        try:
+            async with self._session.begin_nested():
+                self._session.add(row)
+                await self._session.flush()
+        except IntegrityError as exc:
+            if order.type == OrderType.commission:
+                raise ActiveCommissionExistsError(str(order.customer_telegram_id)) from exc
+            raise
         return row.to_domain()
 
     async def save(self, order: Order) -> Order:
@@ -120,6 +144,50 @@ class SqlOrderRepository:
         )
         return [row.to_domain() for row in result.scalars().all()]
 
+    async def get_active_commission(self, telegram_id: int) -> Order | None:
+        result = await self._session.execute(
+            select(OrderTable)
+            .options(selectinload(OrderTable.links))
+            .where(
+                OrderTable.customer_telegram_id == telegram_id,
+                OrderTable.type == OrderType.commission.value,
+                OrderTable.status.in_([status.value for status in ACTIVE_CUSTOMER_STATUSES]),
+            )
+            .order_by(OrderTable.created_at.desc())
+            .limit(1)
+        )
+        row = result.scalars().first()
+        return row.to_domain() if row else None
+
+    async def get_latest_commission(self, telegram_id: int) -> Order | None:
+        result = await self._session.execute(
+            select(OrderTable)
+            .options(selectinload(OrderTable.links))
+            .where(
+                OrderTable.customer_telegram_id == telegram_id,
+                OrderTable.type == OrderType.commission.value,
+                OrderTable.status.notin_([OrderStatus.spam.value, OrderStatus.cancelled.value]),
+            )
+            .order_by(OrderTable.created_at.desc())
+            .limit(1)
+        )
+        row = result.scalars().first()
+        return row.to_domain() if row else None
+
+    async def get_active_by_project_id(self, project_id: str) -> Order | None:
+        result = await self._session.execute(
+            select(OrderTable)
+            .options(selectinload(OrderTable.links))
+            .where(
+                OrderTable.github_project_id == project_id,
+                OrderTable.type == OrderType.commission.value,
+                OrderTable.status.in_([status.value for status in ACTIVE_CUSTOMER_STATUSES]),
+            )
+            .limit(1)
+        )
+        row = result.scalars().first()
+        return row.to_domain() if row else None
+
     async def find_by_repo(self, owner: str, repo: str) -> list[Order]:
         result = await self._session.execute(
             select(OrderTable)
@@ -171,6 +239,55 @@ class SqlWebhookDeliveryRepository:
         except IntegrityError:
             return False
         return True
+
+
+class SqlMilestoneNotificationRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def claim(self, order_id: UUID, milestone_number: int) -> bool:
+        stmt = select(MilestoneNotificationTable).where(
+            MilestoneNotificationTable.order_id == order_id,
+            MilestoneNotificationTable.github_milestone_number == milestone_number,
+        )
+        if (await self._session.execute(stmt)).scalars().first():
+            return False
+        try:
+            async with self._session.begin_nested():
+                self._session.add(
+                    MilestoneNotificationTable(
+                        order_id=order_id,
+                        github_milestone_number=milestone_number,
+                    )
+                )
+                await self._session.flush()
+        except IntegrityError:
+            return False
+        return True
+
+
+class SqlCustomerRequestIssueRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, link: CustomerRequestIssue) -> None:
+        self._session.add(
+            CustomerRequestIssueTable(
+                id=link.id,
+                order_id=link.order_id,
+                github_node_id=link.github_node_id,
+                created_at=link.created_at,
+            )
+        )
+        await self._session.flush()
+
+    async def find_order_id(self, github_node_id: str) -> UUID | None:
+        result = await self._session.execute(
+            select(CustomerRequestIssueTable.order_id).where(
+                CustomerRequestIssueTable.github_node_id == github_node_id
+            )
+        )
+        return result.scalar_one_or_none()
 
 
 class SqlOutboxRepository:
