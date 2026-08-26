@@ -9,12 +9,16 @@ from beerwolf_shop.domain.entities import User
 from beerwolf_shop.domain.exceptions import DomainError
 from beerwolf_shop.infrastructure.telegram.keyboards import (
     confirm_menu,
-    main_menu,
     render_md,
     wizard_menu,
 )
 from beerwolf_shop.presentation.telegram.context import AppContext
-from beerwolf_shop.presentation.telegram.handlers.common import LocaleText, reply_error, require_text
+from beerwolf_shop.presentation.telegram.handlers.common import (
+    LocaleText,
+    build_main_menu,
+    reply_error,
+    require_text,
+)
 from beerwolf_shop.presentation.telegram.states import OrderWizard
 
 router = Router(name="order_wizard")
@@ -28,6 +32,12 @@ def _blank(i18n, value: str | None) -> str | None:
 
 @router.message(LocaleText("common.btn_new_order"))
 async def start_wizard(message: Message, ctx: AppContext, locale: str, state: FSMContext) -> None:
+    if message.from_user and await ctx.orders.get_active_commission(message.from_user.id):
+        await message.answer(
+            render_md(ctx.i18n, locale, "order.active_exists"),
+            parse_mode="MarkdownV2",
+        )
+        return
     await state.set_state(OrderWizard.name)
     await message.answer(
         render_md(ctx.i18n, locale, "order.ask_name"),
@@ -138,5 +148,5 @@ async def confirm_order(
     await message.answer(
         render_md(ctx.i18n, locale, "order.submitted"),
         parse_mode="MarkdownV2",
-        reply_markup=main_menu(ctx.i18n, locale, is_admin=is_admin),
+        reply_markup=await build_main_menu(ctx, user, locale, is_admin),
     )

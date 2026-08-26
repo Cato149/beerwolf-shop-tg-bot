@@ -9,16 +9,22 @@ from typing import Protocol
 
 from aiogram import Bot
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramAPIError
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramNetworkError,
+    TelegramRetryAfter,
+    TelegramServerError,
+)
+from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 
 from beerwolf_shop.config import Settings
 from beerwolf_shop.domain.entities import Order, User
 from beerwolf_shop.infrastructure.github.gfm import RenderedMarkdown
 from beerwolf_shop.infrastructure.telegram.i18n import I18n
-from beerwolf_shop.infrastructure.telegram.keyboards import admin_new_order_actions, render_md
+from beerwolf_shop.infrastructure.telegram.keyboards import admin_new_order_actions, main_menu, render_md
 
 logger = logging.getLogger(__name__)
+_RETRYABLE_TELEGRAM_ERRORS = (TelegramNetworkError, TelegramRetryAfter, TelegramServerError)
 
 
 class NotifierPort(Protocol):
@@ -26,12 +32,32 @@ class NotifierPort(Protocol):
 
     async def notify_admins_new_order(self, order: Order, customer: User | None, locale: str = "ru") -> None: ...
 
-    async def notify_customer(self, telegram_id: int, locale: str, key: str, **kwargs: object) -> None: ...
+    async def notify_admins_customer_request(
+        self,
+        order: Order,
+        customer: User | None,
+        title: str,
+        wish: str,
+        url: str,
+        locale: str = "ru",
+    ) -> None: ...
 
-    async def send_closed_issue(
+    async def notify_customer(
         self,
         telegram_id: int,
         locale: str,
+        key: str,
+        *,
+        refresh_menu: bool = False,
+        reply_markup: InlineKeyboardMarkup | ReplyKeyboardMarkup | None = None,
+        **kwargs: object,
+    ) -> None: ...
+
+    async def send_issue_update(
+        self,
+        telegram_id: int,
+        locale: str,
+        header_key: str,
         title: str,
         url: str,
         rendered: RenderedMarkdown,
@@ -50,7 +76,7 @@ class TelegramNotifier:
         locale: str,
         key: str,
         *,
-        reply_markup: InlineKeyboardMarkup | None = None,
+        reply_markup: InlineKeyboardMarkup | ReplyKeyboardMarkup | None = None,
         **kwargs: object,
     ) -> None:
         text = render_md(self._i18n, locale, key, **kwargs)
@@ -61,6 +87,9 @@ class TelegramNotifier:
                 parse_mode=ParseMode.MARKDOWN_V2,
                 reply_markup=reply_markup,
             )
+        except _RETRYABLE_TELEGRAM_ERRORS:
+            # Let the outbox retain and retry transient Telegram failures.
+            raise
         except TelegramAPIError:
             logger.info("Could not deliver to %s (user may not have started the bot)", telegram_id)
 
@@ -80,11 +109,51 @@ class TelegramNotifier:
                 contacts=order.extra_contacts or "—",
                 references=order.references or "—",
                 budget=order.budget or "—",
-                reply_markup=admin_new_order_actions(order.id, self._i18n, locale),
+                reply_markup=admin_new_order_actions(order.id, self._i18n, locale, order.type),
             )
 
-    async def notify_customer(self, telegram_id: int, locale: str, key: str, **kwargs: object) -> None:
-        await self.send_md(telegram_id, locale, key, **kwargs)
+    async def notify_admins_customer_request(
+        self,
+        order: Order,
+        customer: User | None,
+        title: str,
+        wish: str,
+        url: str,
+        locale: str = "ru",
+    ) -> None:
+        username = f"@{customer.username}" if customer and customer.username else "—"
+        for admin_id in self._settings.admin_telegram_ids:
+            await self.send_md(
+                admin_id,
+                locale,
+                "admin.customer_request_notify",
+                username=username,
+                telegram_id=order.customer_telegram_id,
+                title=title,
+                wish=wish,
+                url=url,
+            )
+
+    def customer_menu(self, telegram_id: int, locale: str, project: Order | None) -> ReplyKeyboardMarkup:
+        return main_menu(
+            self._i18n,
+            locale,
+            is_admin=self._settings.is_admin(telegram_id),
+            project=project,
+        )
+
+    async def notify_customer(
+        self,
+        telegram_id: int,
+        locale: str,
+        key: str,
+        *,
+        refresh_menu: bool = False,
+        reply_markup: InlineKeyboardMarkup | ReplyKeyboardMarkup | None = None,
+        **kwargs: object,
+    ) -> None:
+        _ = refresh_menu
+        await self.send_md(telegram_id, locale, key, reply_markup=reply_markup, **kwargs)
 
     async def send_html_with_photos(
         self,
@@ -102,18 +171,20 @@ class TelegramNotifier:
                 parse_mode=ParseMode.HTML,
             )
 
-    async def send_closed_issue(
+    async def send_issue_update(
         self,
         telegram_id: int,
         locale: str,
+        header_key: str,
         title: str,
         url: str,
         rendered: RenderedMarkdown,
     ) -> None:
-        header = render_md(self._i18n, locale, "progress.issue_closed", title=title, url=url)
+        header = render_md(self._i18n, locale, header_key, title=title, url=url)
         try:
             await self._bot.send_message(telegram_id, header, parse_mode=ParseMode.MARKDOWN_V2)
             await self.send_html_with_photos(telegram_id, rendered.html, rendered.photos)
+        except _RETRYABLE_TELEGRAM_ERRORS:
+            raise
         except TelegramAPIError:
             logger.warning("Could not deliver closed-issue notification to %s", telegram_id)
-            raise

@@ -14,7 +14,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from beerwolf_shop.application.github import (
     BuildProgress,
     CreateCustomerRequest,
-    HandleIssueClosed,
+    GetMilestoneDetails,
+    HandleGithubIssueEvent,
     ListRepoProjects,
     StartInProgress,
 )
@@ -22,6 +23,7 @@ from beerwolf_shop.application.orders import (
     ChangeStatus,
     CompleteOrder,
     CreateManualOrder,
+    GetCustomerProject,
     GetOrder,
     ListCustomerOrders,
     ListOrders,
@@ -29,16 +31,28 @@ from beerwolf_shop.application.orders import (
     StartDiscussion,
     SubmitOrder,
 )
-from beerwolf_shop.application.support import CreateSupportTicket
+from beerwolf_shop.application.support import (
+    CancelSupportTicket,
+    CompleteSupportTicket,
+    CreateSupportTicket,
+    TakeSupportTicket,
+)
 from beerwolf_shop.application.users import SetLanguage, UpsertUser
 from beerwolf_shop.config import Settings
 from beerwolf_shop.domain.entities import User
 from beerwolf_shop.infrastructure.db.repositories import (
     SqlCompletionLinkRepository,
+    SqlCustomerRequestIssueRepository,
+    SqlMilestoneNotificationRepository,
     SqlOrderRepository,
     SqlOutboxRepository,
     SqlUserRepository,
     SqlWebhookDeliveryRepository,
+)
+from beerwolf_shop.infrastructure.db.session import (
+    SessionRollbackRegistry,
+    clear_rollback_compensations,
+    run_rollback_compensations,
 )
 from beerwolf_shop.infrastructure.github.client import GithubClient
 from beerwolf_shop.infrastructure.telegram.i18n import I18n
@@ -66,12 +80,15 @@ class AppContext:
         self.orders = SqlOrderRepository(session)
         self.links = SqlCompletionLinkRepository(session)
         self.deliveries = SqlWebhookDeliveryRepository(session)
+        self.milestone_notifications = SqlMilestoneNotificationRepository(session)
+        self.request_issues = SqlCustomerRequestIssueRepository(session)
         self.upsert_user = UpsertUser(self.users, settings.default_locale)
         self.set_language = SetLanguage(self.users)
         self.submit_order = SubmitOrder(self.users, self.orders)
         self.create_manual = CreateManualOrder(self.users, self.orders)
         self.list_orders = ListOrders(self.orders)
         self.get_order = GetOrder(self.orders, self.links)
+        self.get_customer_project = GetCustomerProject(self.orders)
         self.list_customer_orders = ListCustomerOrders(self.orders)
         self.change_status = ChangeStatus(self.orders)
         self.mark_spam = MarkSpam(self.orders)
@@ -80,9 +97,26 @@ class AppContext:
         self.list_projects = ListRepoProjects(github)
         self.start_in_progress = StartInProgress(self.orders, github, settings)
         self.build_progress = BuildProgress(self.orders, github, settings)
-        self.create_request = CreateCustomerRequest(self.orders, github, settings)
-        self.handle_issue_closed = HandleIssueClosed(self.orders, self.deliveries, github)
+        self.get_milestone_details = GetMilestoneDetails(self.orders, github)
+        rollback_registry = SessionRollbackRegistry(session)
+        self.create_request = CreateCustomerRequest(
+            self.orders,
+            self.request_issues,
+            github,
+            settings,
+            rollback_registry,
+        )
+        self.handle_github_issue_event = HandleGithubIssueEvent(
+            self.orders,
+            self.deliveries,
+            self.milestone_notifications,
+            self.request_issues,
+            github,
+        )
         self.create_support = CreateSupportTicket(self.users, self.orders)
+        self.take_support = TakeSupportTicket(self.orders, github, rollback_registry)
+        self.cancel_support = CancelSupportTicket(self.orders)
+        self.complete_support = CompleteSupportTicket(self.orders, github, rollback_registry)
 
 
 class DbMiddleware(BaseMiddleware):
@@ -139,8 +173,12 @@ class DbMiddleware(BaseMiddleware):
             try:
                 result = await handler(event, data)
                 await session.commit()
+                clear_rollback_compensations(session)
             except Exception:
-                await session.rollback()
+                try:
+                    await session.rollback()
+                finally:
+                    await run_rollback_compensations(session)
                 raise
             await self._outbox.drain()
             return result

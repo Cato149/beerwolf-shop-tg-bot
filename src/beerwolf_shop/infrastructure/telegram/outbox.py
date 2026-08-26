@@ -23,8 +23,10 @@ from beerwolf_shop.infrastructure.telegram.notifier import TelegramNotifier
 logger = logging.getLogger(__name__)
 
 KIND_NOTIFY_ADMINS = "notify_admins_new_order"
+KIND_NOTIFY_ADMINS_REQUEST = "notify_admins_customer_request"
 KIND_NOTIFY_CUSTOMER = "notify_customer"
 KIND_CLOSED_ISSUE = "closed_issue"
+KIND_ISSUE_UPDATE = "issue_update"
 
 
 class OutboxNotifier:
@@ -39,25 +41,64 @@ class OutboxNotifier:
             {"order_id": str(order.id), "locale": locale},
         )
 
-    async def notify_customer(self, telegram_id: int, locale: str, key: str, **kwargs: object) -> None:
+    async def notify_admins_customer_request(
+        self,
+        order: Order,
+        customer: User | None,
+        title: str,
+        wish: str,
+        url: str,
+        locale: str = "ru",
+    ) -> None:
         await self._outbox.enqueue(
-            KIND_NOTIFY_CUSTOMER,
-            {"telegram_id": telegram_id, "locale": locale, "key": key, "kwargs": kwargs},
+            KIND_NOTIFY_ADMINS_REQUEST,
+            {
+                "order_id": str(order.id),
+                "title": title,
+                "wish": wish,
+                "url": url,
+                "locale": locale,
+            },
         )
 
-    async def send_closed_issue(
+    async def notify_customer(
         self,
         telegram_id: int,
         locale: str,
+        key: str,
+        *,
+        refresh_menu: bool = False,
+        reply_markup=None,
+        **kwargs: object,
+    ) -> None:
+        # Reply markup is rebuilt after commit; aiogram objects are not JSON serializable.
+        _ = reply_markup
+        await self._outbox.enqueue(
+            KIND_NOTIFY_CUSTOMER,
+            {
+                "telegram_id": telegram_id,
+                "locale": locale,
+                "key": key,
+                "kwargs": kwargs,
+                "refresh_menu": refresh_menu,
+            },
+        )
+
+    async def send_issue_update(
+        self,
+        telegram_id: int,
+        locale: str,
+        header_key: str,
         title: str,
         url: str,
         rendered: RenderedMarkdown,
     ) -> None:
         await self._outbox.enqueue(
-            KIND_CLOSED_ISSUE,
+            KIND_ISSUE_UPDATE,
             {
                 "telegram_id": telegram_id,
                 "locale": locale,
+                "header_key": header_key,
                 "title": title,
                 "url": url,
                 "html": rendered.html,
@@ -82,24 +123,51 @@ async def deliver_outbox_event(
         customer = await users.get_by_telegram_id(order.customer_telegram_id)
         await notifier.notify_admins_new_order(order, customer, locale=payload.get("locale") or "ru")
         return
+    if kind == KIND_NOTIFY_ADMINS_REQUEST:
+        order = await orders.get(UUID(payload["order_id"]))
+        if order is None:
+            logger.warning("outbox %s: order %s is gone", kind, payload.get("order_id"))
+            return
+        customer = await users.get_by_telegram_id(order.customer_telegram_id)
+        await notifier.notify_admins_customer_request(
+            order,
+            customer,
+            payload.get("title") or "",
+            payload.get("wish") or "",
+            payload.get("url") or "",
+            locale=payload.get("locale") or "ru",
+        )
+        return
     if kind == KIND_NOTIFY_CUSTOMER:
         kwargs = payload.get("kwargs") or {}
         if not isinstance(kwargs, dict):
             kwargs = {}
+        reply_markup = None
+        if payload.get("refresh_menu"):
+            project = await orders.get_active_commission(int(payload["telegram_id"]))
+            if project is None:
+                project = await orders.get_latest_commission(int(payload["telegram_id"]))
+            reply_markup = notifier.customer_menu(
+                int(payload["telegram_id"]),
+                payload.get("locale") or "ru",
+                project,
+            )
         await notifier.notify_customer(
             int(payload["telegram_id"]),
             payload.get("locale") or "ru",
             payload["key"],
+            reply_markup=reply_markup,
             **kwargs,
         )
         return
-    if kind == KIND_CLOSED_ISSUE:
+    if kind in {KIND_CLOSED_ISSUE, KIND_ISSUE_UPDATE}:
         photos_raw = payload.get("photos") or []
         photos = [(str(item[0]), str(item[1])) for item in photos_raw]
         rendered = RenderedMarkdown(html=payload.get("html") or "", photos=photos)
-        await notifier.send_closed_issue(
+        await notifier.send_issue_update(
             int(payload["telegram_id"]),
             payload.get("locale") or "ru",
+            payload.get("header_key") or "progress.issue_closed",
             payload.get("title") or "",
             payload.get("url") or "",
             rendered,

@@ -1,7 +1,9 @@
 from uuid import uuid4
 
 from beerwolf_shop.application.dto import SubmitOrderDTO
-from beerwolf_shop.infrastructure.telegram.keyboards import AdminListCb
+from beerwolf_shop.domain.enums import OrderStatus, OrderType
+from beerwolf_shop.infrastructure.telegram.i18n import I18n
+from beerwolf_shop.infrastructure.telegram.keyboards import AdminListCb, admin_order_card
 from beerwolf_shop.infrastructure.telegram.outbox import (
     KIND_CLOSED_ISSUE,
     KIND_NOTIFY_ADMINS,
@@ -18,6 +20,21 @@ def test_admin_list_callback_keeps_support_kind() -> None:
     assert data.status == "application"
     assert data.page == 2
     assert data.kind == "support"
+
+
+def test_support_card_has_take_and_cancel_actions() -> None:
+    markup = admin_order_card(
+        uuid4(),
+        OrderStatus.application,
+        I18n(default_locale="ru"),
+        "ru",
+        OrderType.support,
+    )
+    callbacks = {button.callback_data for row in markup.inline_keyboard for button in row}
+    assert any(value and "sup_take" in value for value in callbacks)
+    assert any(value and "sup_cancel" in value for value in callbacks)
+    back = next(value for value in callbacks if value and value.startswith("alist:"))
+    assert AdminListCb.unpack(back).kind == "support"
 
 
 async def test_deliver_notify_admins_and_customer() -> None:
@@ -42,6 +59,7 @@ async def test_deliver_notify_admins_and_customer() -> None:
             "locale": "ru",
             "key": "order.discussion_started",
             "kwargs": {"contact": "@admin"},
+            "refresh_menu": True,
         },
         ctx.notifier,
         ctx.users,
@@ -66,8 +84,8 @@ async def test_deliver_closed_issue() -> None:
         ctx.users,
         ctx.orders,
     )
-    assert ctx.notifier.closed[0][0] == 9
-    assert ctx.notifier.closed[0][1] == "Done"
+    assert ctx.notifier.issue_updates[0][0] == 9
+    assert ctx.notifier.issue_updates[0][2] == "Done"
 
 
 async def test_deliver_missing_order_is_noop() -> None:

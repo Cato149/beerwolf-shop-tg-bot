@@ -62,10 +62,11 @@ async def test_progress_and_customer_request() -> None:
     assert snapshot.done == 1
     assert snapshot.percent == 50
     assert "Draw UI" in snapshot.in_progress[0]
-    url = await ctx.create_request.execute(
-        CustomerRequestDTO(order_id=linked.id, title="Bigger ears", body="pls", actor_telegram_id=5)
+    issue = await ctx.create_request.execute(
+        CustomerRequestDTO(order_id=linked.id, wish="Bigger ears\npls", actor_telegram_id=5)
     )
-    assert url.endswith("/issues/1")
+    assert issue.html_url.endswith("/issues/1")
+    assert issue.title == "Bigger ears"
     assert "customer request" in ctx.github.labels
 
 
@@ -81,3 +82,214 @@ async def test_graphql_network_error_is_domain_error() -> None:
 
         with pytest.raises(GithubIntegrationError, match="github_unreachable"):
             await client.list_repository_projects("acme", "shop")
+
+
+@pytest.mark.asyncio
+async def test_milestone_details_use_project_status_and_due_date() -> None:
+    from beerwolf_shop.application.dto import LinkGithubDTO, SubmitOrderDTO
+    from beerwolf_shop.infrastructure.github.client import GithubIssue, ProjectItem
+
+    from tests.fakes import FakeContext
+
+    ctx = FakeContext()
+    order = await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=5, display_name="A", idea="ui"))
+    await ctx.start_discussion.execute(order.id)
+    linked, _, _ = await ctx.start_in_progress.execute(
+        LinkGithubDTO(order_id=order.id, repo_url="https://github.com/acme/shop", project_display_name="Shop")
+    )
+    ctx.github.issues = [
+        GithubIssue(
+            number=1,
+            title="Draw UI",
+            state="open",
+            body="",
+            node_id="I_1",
+            html_url="https://github.com/acme/shop/issues/1",
+            milestone_title="v1",
+            milestone_due_on="2026-09-01T00:00:00Z",
+            is_pull_request=False,
+        )
+    ]
+    ctx.github.project_items.append(
+        ProjectItem(
+            number=1,
+            node_id="OTHER_1",
+            repo_full_name="acme/other",
+            title="Other repository issue",
+            state="OPEN",
+            status="Blocked",
+            due="2027-01-01",
+            milestone_title="v1",
+            milestone_due_on=None,
+            is_closed=False,
+        )
+    )
+
+    details = await ctx.get_milestone_details.execute(linked.id, 1, actor_telegram_id=5)
+    assert details.title == "v1"
+    assert details.tasks[0].status == "In Progress"
+    assert details.tasks[0].due_on == "2026-09-12"
+
+
+@pytest.mark.asyncio
+async def test_ready_and_milestone_completion_events_are_idempotent() -> None:
+    from beerwolf_shop.application.dto import LinkGithubDTO, SubmitOrderDTO
+    from beerwolf_shop.infrastructure.github.client import ProjectItem
+
+    from tests.fakes import FakeContext
+
+    ctx = FakeContext()
+    order = await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=5, display_name="A", idea="ui"))
+    await ctx.start_discussion.execute(order.id)
+    linked, _, _ = await ctx.start_in_progress.execute(
+        LinkGithubDTO(order_id=order.id, repo_url="https://github.com/acme/shop", project_display_name="Shop")
+    )
+    ctx.github.project_items.append(
+        ProjectItem(
+            number=7,
+            node_id="I_7",
+            repo_full_name="acme/shop",
+            title="Bigger ears",
+            state="OPEN",
+            status="Backlog",
+            due=None,
+            milestone_title=None,
+            milestone_due_on=None,
+            is_closed=False,
+        )
+    )
+    ready = await ctx.handle_github_issue_event.execute(
+        "ready-1",
+        {
+            "action": "labeled",
+            "label": {"name": "ready"},
+            "issue": {
+                "number": 7,
+                "node_id": "I_7",
+                "title": "Bigger ears",
+                "body": "Please enlarge them",
+                "html_url": "https://github.com/acme/shop/issues/7",
+                "labels": [{"name": "customer request"}, {"name": "ready"}],
+            },
+            "repository": {"name": "shop", "owner": {"login": "acme"}},
+        },
+    )
+    assert ready is not None
+    assert ready.kind == "ready"
+    assert ready.orders == [linked]
+
+    ctx.github.milestones[0].open_issues = 0
+    ctx.github.milestones[0].closed_issues = 1
+    payload = {
+        "action": "closed",
+        "issue": {
+            "number": 1,
+            "title": "Draw UI",
+            "body": "done",
+            "html_url": "https://github.com/acme/shop/issues/1",
+            "milestone": {"number": 1},
+        },
+        "repository": {"name": "shop", "owner": {"login": "acme"}},
+    }
+    first = await ctx.handle_github_issue_event.execute("closed-1", payload)
+    second = await ctx.handle_github_issue_event.execute("closed-2", payload)
+    assert first is not None and first.milestone_orders == [linked]
+    assert second is not None and second.milestone_orders == []
+
+
+@pytest.mark.asyncio
+async def test_empty_selected_project_does_not_fallback_to_repository_issues() -> None:
+    from beerwolf_shop.application.dto import LinkGithubDTO, SubmitOrderDTO
+    from beerwolf_shop.infrastructure.github.client import GithubIssue
+
+    from tests.fakes import FakeContext
+
+    ctx = FakeContext()
+    order = await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=5, display_name="A", idea="ui"))
+    await ctx.start_discussion.execute(order.id)
+    linked, _, _ = await ctx.start_in_progress.execute(
+        LinkGithubDTO(order_id=order.id, repo_url="https://github.com/acme/shop", project_display_name="Shop")
+    )
+    ctx.github.project_items = []
+    ctx.github.issues = [
+        GithubIssue(
+            number=99,
+            title="Unrelated repository issue",
+            state="open",
+            body="",
+            node_id="I_99",
+            html_url="https://github.com/acme/shop/issues/99",
+            milestone_title=None,
+            milestone_due_on=None,
+            is_pull_request=False,
+        )
+    ]
+
+    snapshot = await ctx.build_progress.execute(linked.id, actor_telegram_id=5)
+    assert snapshot.source == "project"
+    assert snapshot.total == 0
+
+
+@pytest.mark.asyncio
+async def test_active_github_project_cannot_be_linked_twice() -> None:
+    from beerwolf_shop.application.dto import LinkGithubDTO, SubmitOrderDTO
+    from beerwolf_shop.domain.exceptions import GithubIntegrationError
+
+    from tests.fakes import FakeContext
+
+    ctx = FakeContext()
+    first = await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=1, display_name="A", idea="one"))
+    second = await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=2, display_name="B", idea="two"))
+    await ctx.start_discussion.execute(first.id)
+    await ctx.start_discussion.execute(second.id)
+    await ctx.start_in_progress.execute(
+        LinkGithubDTO(order_id=first.id, repo_url="https://github.com/acme/shop", project_display_name="One")
+    )
+    with pytest.raises(GithubIntegrationError, match="github_project_already_linked"):
+        await ctx.start_in_progress.execute(
+            LinkGithubDTO(order_id=second.id, repo_url="https://github.com/acme/shop", project_display_name="Two")
+        )
+
+
+@pytest.mark.asyncio
+async def test_stale_customer_request_mapping_never_falls_back_to_reused_project() -> None:
+    from beerwolf_shop.application.dto import CustomerRequestDTO, LinkGithubDTO, SubmitOrderDTO
+    from beerwolf_shop.domain.enums import OrderStatus
+
+    from tests.fakes import FakeContext
+
+    ctx = FakeContext()
+    old = await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=1, display_name="A", idea="old"))
+    await ctx.start_discussion.execute(old.id)
+    old, _, _ = await ctx.start_in_progress.execute(
+        LinkGithubDTO(order_id=old.id, repo_url="https://github.com/acme/shop", project_display_name="Old")
+    )
+    issue = await ctx.create_request.execute(
+        CustomerRequestDTO(order_id=old.id, wish="Old request", actor_telegram_id=1)
+    )
+    old.status = OrderStatus.completed
+    await ctx.orders.save(old)
+
+    new = await ctx.submit_order.execute(SubmitOrderDTO(customer_telegram_id=2, display_name="B", idea="new"))
+    await ctx.start_discussion.execute(new.id)
+    await ctx.start_in_progress.execute(
+        LinkGithubDTO(order_id=new.id, repo_url="https://github.com/acme/shop", project_display_name="New")
+    )
+    result = await ctx.handle_github_issue_event.execute(
+        "stale-ready",
+        {
+            "action": "labeled",
+            "label": {"name": "ready"},
+            "issue": {
+                "number": issue.number,
+                "node_id": issue.node_id,
+                "title": issue.title,
+                "body": issue.body,
+                "html_url": issue.html_url,
+                "labels": [{"name": "customer request"}, {"name": "ready"}],
+            },
+            "repository": {"name": "shop", "owner": {"login": "acme"}},
+        },
+    )
+    assert result is not None
+    assert result.orders == []

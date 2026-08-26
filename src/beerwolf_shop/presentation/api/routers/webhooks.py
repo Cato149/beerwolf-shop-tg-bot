@@ -58,8 +58,8 @@ async def telegram_webhook(
     "/webhooks/github",
     summary="GitHub issues webhook",
     description=(
-        "Handles `issues` closed events. Verifies X-Hub-Signature-256, is idempotent by X-GitHub-Delivery, "
-        "and notifies the customer with HTML + photos converted from the issue/comment GFM."
+        "Handles closed issues, customer-request `ready` labels and 100% milestones. "
+        "Verifies X-Hub-Signature-256 and is idempotent by X-GitHub-Delivery."
     ),
 )
 async def github_webhook(
@@ -84,7 +84,7 @@ async def github_webhook(
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid_json") from exc
     try:
-        result = await ctx.handle_issue_closed.execute(x_github_delivery, payload)
+        result = await ctx.handle_github_issue_event.execute(x_github_delivery, payload)
     except DuplicateDeliveryError:
         return {"status": "duplicate"}
     except GithubIntegrationError:
@@ -92,15 +92,26 @@ async def github_webhook(
         raise
     if result is None:
         return {"status": "ignored"}
-    orders, rendered, closed = result
-    for order in orders:
+    header_key = "progress.request_ready" if result.kind == "ready" else "progress.issue_closed"
+    for order in result.orders:
         customer = await ctx.users.get_by_telegram_id(order.customer_telegram_id)
         locale = customer.language if customer else settings.default_locale
-        await ctx.notifier.send_closed_issue(
+        await ctx.notifier.send_issue_update(
             order.customer_telegram_id,
             locale,
-            closed.title,
-            closed.html_url,
-            rendered,
+            header_key,
+            result.issue.title,
+            result.issue.html_url,
+            result.rendered,
         )
+    if result.milestone:
+        for order in result.milestone_orders or []:
+            customer = await ctx.users.get_by_telegram_id(order.customer_telegram_id)
+            locale = customer.language if customer else settings.default_locale
+            await ctx.notifier.notify_customer(
+                order.customer_telegram_id,
+                locale,
+                "progress.milestone_completed",
+                title=result.milestone.title,
+            )
     return {"status": "ok"}

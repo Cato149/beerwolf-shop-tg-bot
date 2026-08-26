@@ -48,9 +48,28 @@ class CompleteOrderDTO(BaseModel):
 
 class CustomerRequestDTO(BaseModel):
     order_id: UUID
-    title: str
-    body: str
+    wish: str
     actor_telegram_id: int
+
+
+class MilestoneSummary(BaseModel):
+    number: int
+    title: str
+    due_on: str | None = None
+
+
+class MilestoneTask(BaseModel):
+    number: int
+    title: str
+    status: str
+    due_on: str | None = None
+
+
+class MilestoneDetails(BaseModel):
+    number: int
+    title: str
+    due_on: str | None = None
+    tasks: list[MilestoneTask] = Field(default_factory=list)
 
 
 class ProgressSnapshot(BaseModel):
@@ -59,6 +78,5 @@ class ProgressSnapshot(BaseModel):
     percent: int
     bar: str
     in_progress: list[str]
-    current_milestone: str | None = None
-    next_milestone: str | None = None
+    milestones: list[MilestoneSummary] = Field(default_factory=list)
     source: str = "project"

@@ -12,6 +12,7 @@ from beerwolf_shop.presentation.api.schemas import (
     CompletionLinkOut,
     CustomerRequestIn,
     CustomerRequestOut,
+    MilestoneDetailsOut,
     OrderCreateIn,
     OrderOut,
     ProgressOut,
@@ -37,6 +38,8 @@ def to_order_out(order: Order) -> OrderOut:
         github_owner=order.github_owner,
         github_repo=order.github_repo,
         github_project_id=order.github_project_id,
+        github_milestone_number=order.github_milestone_number,
+        github_milestone_title=order.github_milestone_title,
         project_display_name=order.project_display_name,
         completion_message=order.completion_message,
         created_at=order.created_at,
@@ -107,7 +110,7 @@ async def get_order(
     "/{order_id}/progress",
     response_model=ProgressOut,
     summary="GitHub progress snapshot",
-    description="Counts tasks, builds a text bar, and returns current/next milestones. Available from `in_progress`.",
+    description="Counts tasks, builds a text bar, and returns open milestone buttons. Available from `in_progress`.",
 )
 async def progress(
     order_id: UUID,
@@ -116,6 +119,26 @@ async def progress(
 ) -> ProgressOut:
     snapshot = await ctx.build_progress.execute(order_id, actor_telegram_id=telegram_id)
     return ProgressOut.model_validate(snapshot.model_dump())
+
+
+@router.get(
+    "/{order_id}/milestones/{milestone_number}",
+    response_model=MilestoneDetailsOut,
+    summary="Milestone tasks",
+    description="Returns issues in one GitHub milestone with Projects v2 status and due date when available.",
+)
+async def milestone_details(
+    order_id: UUID,
+    milestone_number: int,
+    telegram_id: Annotated[int, Depends(get_current_telegram_id)],
+    ctx: Annotated[AppContext, Depends(get_context)],
+) -> MilestoneDetailsOut:
+    details = await ctx.get_milestone_details.execute(
+        order_id,
+        milestone_number,
+        actor_telegram_id=telegram_id,
+    )
+    return MilestoneDetailsOut.model_validate(details.model_dump())
 
 
 @router.get(
@@ -146,15 +169,23 @@ async def create_request(
     telegram_id: Annotated[int, Depends(get_current_telegram_id)],
     ctx: Annotated[AppContext, Depends(get_context)],
 ) -> CustomerRequestOut:
-    url = await ctx.create_request.execute(
+    order = await ctx.get_order.execute(order_id, actor_telegram_id=telegram_id)
+    issue = await ctx.create_request.execute(
         CustomerRequestDTO(
             order_id=order_id,
-            title=body.title,
-            body=body.body,
+            wish=body.wish,
             actor_telegram_id=telegram_id,
         )
     )
-    return CustomerRequestOut(html_url=url)
+    user = await ctx.users.get_by_telegram_id(telegram_id)
+    await ctx.notifier.notify_admins_customer_request(
+        order,
+        user,
+        issue.title,
+        body.wish,
+        issue.html_url,
+    )
+    return CustomerRequestOut(html_url=issue.html_url)
 
 
 @router.post(
@@ -174,9 +205,6 @@ async def create_support(
         parent_order_id=order_id,
         actor_telegram_id=telegram_id,
         idea=body.idea,
-        extra_contacts=body.extra_contacts,
-        references=body.references,
-        budget=body.budget,
     )
     user = await ctx.users.get_by_telegram_id(telegram_id)
     await ctx.notifier.notify_admins_new_order(ticket, user)

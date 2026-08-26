@@ -34,13 +34,8 @@ class AdminComplete(StatesGroup):
 
 
 class CustomerRequestWizard(StatesGroup):
-    title = State()
-    body = State()
+    wish = State()
 
 
 class SupportWizard(StatesGroup):
-    idea = State()
-    contacts = State()
-    references = State()
-    budget = State()
-    confirm = State()
+    wish = State()

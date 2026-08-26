@@ -1,5 +1,6 @@
 """Human-readable order cards (still rendered as MarkdownV2 via locale templates)."""
 
+from beerwolf_shop.application.dto import MilestoneDetails
 from beerwolf_shop.domain.entities import Order, User
 from beerwolf_shop.domain.enums import OrderStatus, OrderType
 from beerwolf_shop.infrastructure.telegram.i18n import I18n
@@ -70,12 +71,34 @@ def progress_message(i18n: I18n, locale: str, project: str, snapshot) -> str:
         lines.append(render_md(i18n, locale, "progress.in_work"))
         for item in snapshot.in_progress:
             lines.append(render_md(i18n, locale, "progress.in_work_item", item=item))
-    if snapshot.current_milestone:
-        lines.append(render_md(i18n, locale, "progress.current_milestone", title=snapshot.current_milestone))
-    else:
-        lines.append(render_md(i18n, locale, "progress.no_milestones"))
-    if snapshot.next_milestone:
-        lines.append(render_md(i18n, locale, "progress.next_milestone", title=snapshot.next_milestone))
+    return "\n".join(lines)
+
+
+def milestone_message(i18n: I18n, locale: str, details: MilestoneDetails) -> str:
+    due = details.due_on[:10] if details.due_on else i18n.get(locale, "progress.none")
+    lines = [
+        render_md(
+            i18n,
+            locale,
+            "progress.milestone_header",
+            title=details.title,
+            due=due,
+        )
+    ]
+    if not details.tasks:
+        lines.append(render_md(i18n, locale, "progress.milestone_empty"))
+    for task in details.tasks:
+        task_due = task.due_on[:10] if task.due_on else i18n.get(locale, "progress.none")
+        lines.append(
+            render_md(
+                i18n,
+                locale,
+                "progress.milestone_task",
+                title=task.title,
+                status=task.status,
+                due=task_due,
+            )
+        )
     return "\n".join(lines)
 
 

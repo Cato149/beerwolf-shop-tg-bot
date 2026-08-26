@@ -9,6 +9,7 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
+from beerwolf_shop.domain.entities import Order
 from beerwolf_shop.domain.enums import OrderStatus, OrderType
 from beerwolf_shop.infrastructure.telegram.i18n import I18n
 from beerwolf_shop.infrastructure.telegram.markdown import render_locale
@@ -37,12 +38,19 @@ class OrderViewCb(CallbackData, prefix="oview"):
     order_id: str
 
 
+class MilestoneCb(CallbackData, prefix="mile"):
+    action: str
+    order_id: str
+    number: int
+
+
 STATUS_FILTERS: tuple[tuple[str, OrderStatus | None], ...] = (
     ("all", None),
     ("application", OrderStatus.application),
     ("discussion", OrderStatus.discussion),
     ("in_progress", OrderStatus.in_progress),
     ("completed", OrderStatus.completed),
+    ("cancelled", OrderStatus.cancelled),
     ("spam", OrderStatus.spam),
 )
 
@@ -52,14 +60,18 @@ def _label(i18n: I18n, locale: str, key: str, **kwargs: object) -> str:
     return i18n.get(locale, key, **kwargs)
 
 
-def main_menu(i18n: I18n, locale: str, *, is_admin: bool) -> ReplyKeyboardMarkup:
+def main_menu(i18n: I18n, locale: str, *, is_admin: bool, project: Order | None = None) -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
-    builder.button(text=_label(i18n, locale, "common.btn_new_order"))
-    builder.button(text=_label(i18n, locale, "common.btn_my_orders"))
+    if project is None or project.status == OrderStatus.completed:
+        builder.button(text=_label(i18n, locale, "common.btn_new_order"))
+    if project is not None:
+        builder.button(text=_label(i18n, locale, "common.btn_my_order"))
+    if project is not None and project.status in {OrderStatus.in_progress, OrderStatus.completed}:
+        builder.button(text=_label(i18n, locale, "customer.btn_recommend"))
     builder.button(text=_label(i18n, locale, "common.btn_language"))
     if is_admin:
         builder.button(text=_label(i18n, locale, "admin.btn_menu"))
-    builder.adjust(2, 2)
+    builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
 
 
@@ -87,17 +99,32 @@ def language_inline(i18n: I18n, locale: str) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def admin_new_order_actions(order_id: UUID, i18n: I18n, locale: str) -> InlineKeyboardMarkup:
+def admin_new_order_actions(
+    order_id: UUID,
+    i18n: I18n,
+    locale: str,
+    order_type: OrderType = OrderType.commission,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     oid = str(order_id)
-    builder.button(
-        text=_label(i18n, locale, "admin.btn_take_discussion"),
-        callback_data=AdminOrderCb(action="disc", order_id=oid),
-    )
-    builder.button(
-        text=_label(i18n, locale, "admin.btn_spam"),
-        callback_data=AdminOrderCb(action="spam", order_id=oid),
-    )
+    if order_type == OrderType.support:
+        builder.button(
+            text=_label(i18n, locale, "admin.btn_support_take"),
+            callback_data=AdminOrderCb(action="sup_take", order_id=oid),
+        )
+        builder.button(
+            text=_label(i18n, locale, "admin.btn_support_cancel"),
+            callback_data=AdminOrderCb(action="sup_cancel", order_id=oid),
+        )
+    else:
+        builder.button(
+            text=_label(i18n, locale, "admin.btn_take_discussion"),
+            callback_data=AdminOrderCb(action="disc", order_id=oid),
+        )
+        builder.button(
+            text=_label(i18n, locale, "admin.btn_spam"),
+            callback_data=AdminOrderCb(action="spam", order_id=oid),
+        )
     builder.button(
         text=_label(i18n, locale, "admin.btn_view"),
         callback_data=AdminOrderCb(action="view", order_id=oid),
@@ -106,10 +133,30 @@ def admin_new_order_actions(order_id: UUID, i18n: I18n, locale: str) -> InlineKe
     return builder.as_markup()
 
 
-def admin_order_card(order_id: UUID, status: OrderStatus, i18n: I18n, locale: str) -> InlineKeyboardMarkup:
+def admin_order_card(
+    order_id: UUID,
+    status: OrderStatus,
+    i18n: I18n,
+    locale: str,
+    order_type: OrderType = OrderType.commission,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     oid = str(order_id)
-    if status == OrderStatus.application:
+    if order_type == OrderType.support and status == OrderStatus.application:
+        builder.button(
+            text=_label(i18n, locale, "admin.btn_support_take"),
+            callback_data=AdminOrderCb(action="sup_take", order_id=oid),
+        )
+        builder.button(
+            text=_label(i18n, locale, "admin.btn_support_cancel"),
+            callback_data=AdminOrderCb(action="sup_cancel", order_id=oid),
+        )
+    elif order_type == OrderType.support and status == OrderStatus.in_progress:
+        builder.button(
+            text=_label(i18n, locale, "admin.btn_complete"),
+            callback_data=AdminOrderCb(action="sup_done", order_id=oid),
+        )
+    elif status == OrderStatus.application:
         builder.button(
             text=_label(i18n, locale, "admin.btn_take_discussion"),
             callback_data=AdminOrderCb(action="disc", order_id=oid),
@@ -128,13 +175,18 @@ def admin_order_card(order_id: UUID, status: OrderStatus, i18n: I18n, locale: st
             callback_data=AdminOrderCb(action="spam", order_id=oid),
         )
     if status == OrderStatus.in_progress:
-        builder.button(
-            text=_label(i18n, locale, "admin.btn_complete"),
-            callback_data=AdminOrderCb(action="done", order_id=oid),
-        )
+        if order_type == OrderType.commission:
+            builder.button(
+                text=_label(i18n, locale, "admin.btn_complete"),
+                callback_data=AdminOrderCb(action="done", order_id=oid),
+            )
     builder.button(
         text=_label(i18n, locale, "admin.btn_back_list"),
-        callback_data=AdminListCb(status="all", page=0),
+        callback_data=AdminListCb(
+            status="application" if order_type == OrderType.support else "all",
+            page=0,
+            kind="support" if order_type == OrderType.support else "all",
+        ),
     )
     builder.adjust(1)
     return builder.as_markup()
@@ -196,24 +248,53 @@ def customer_order_actions(
     status: OrderStatus,
     *,
     order_type: OrderType = OrderType.commission,
-    bot_username: str,
-    share_text: str,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     oid = str(order_id)
-    if status in {OrderStatus.application, OrderStatus.discussion}:
-        builder.button(text=_label(i18n, locale, "customer.btn_status"), callback_data=OrderViewCb(order_id=oid))
     if status == OrderStatus.in_progress:
-        builder.button(text=_label(i18n, locale, "customer.btn_status"), callback_data=f"cust:prog:{oid}")
         builder.button(text=_label(i18n, locale, "customer.btn_request"), callback_data=f"cust:req:{oid}")
-        if bot_username:
-            url = f"https://t.me/share/url?url={quote(f'https://t.me/{bot_username}')}&text={quote(share_text)}"
-            builder.button(text=_label(i18n, locale, "customer.btn_share"), url=url)
     if status == OrderStatus.completed:
         builder.button(text=_label(i18n, locale, "customer.btn_links"), callback_data=f"cust:links:{oid}")
         if order_type == OrderType.commission:
             builder.button(text=_label(i18n, locale, "customer.btn_support"), callback_data=f"cust:sup:{oid}")
     builder.adjust(1)
+    return builder.as_markup()
+
+
+def recommendation_share(i18n: I18n, locale: str, bot_username: str, share_text: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    url = f"https://t.me/share/url?url={quote(f'https://t.me/{bot_username}')}&text={quote(share_text)}"
+    builder.button(text=_label(i18n, locale, "customer.btn_share"), url=url)
+    return builder.as_markup()
+
+
+def progress_milestones(
+    i18n: I18n,
+    locale: str,
+    order_id: UUID,
+    milestones: list,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for milestone in milestones:
+        due = f" · {milestone.due_on[:10]}" if milestone.due_on else ""
+        builder.button(
+            text=f"{milestone.title}{due}"[:64],
+            callback_data=MilestoneCb(
+                action="open",
+                order_id=str(order_id),
+                number=milestone.number,
+            ),
+        )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def milestone_back(i18n: I18n, locale: str, order_id: UUID) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=_label(i18n, locale, "common.btn_back"),
+        callback_data=MilestoneCb(action="back", order_id=str(order_id), number=0),
+    )
     return builder.as_markup()
 
 

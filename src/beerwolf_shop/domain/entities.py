@@ -34,6 +34,26 @@ class CompletionLink:
 
 
 @dataclass(slots=True)
+class MilestoneNotification:
+    """A completed milestone already announced for an order."""
+
+    order_id: UUID
+    github_milestone_number: int
+    id: UUID = field(default_factory=uuid4)
+    created_at: datetime = field(default_factory=_utcnow)
+
+
+@dataclass(slots=True)
+class CustomerRequestIssue:
+    """Persistent ownership of a customer-created GitHub issue."""
+
+    order_id: UUID
+    github_node_id: str
+    id: UUID = field(default_factory=uuid4)
+    created_at: datetime = field(default_factory=_utcnow)
+
+
+@dataclass(slots=True)
 class Order:
     customer_telegram_id: int
     type: OrderType
@@ -47,6 +67,8 @@ class Order:
     github_owner: str | None = None
     github_repo: str | None = None
     github_project_id: str | None = None
+    github_milestone_number: int | None = None
+    github_milestone_title: str | None = None
     project_display_name: str | None = None
     completion_message: str | None = None
     id: UUID = field(default_factory=uuid4)

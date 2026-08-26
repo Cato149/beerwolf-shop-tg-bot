@@ -56,6 +56,13 @@ def test_customer_creates_order() -> None:
         listed = client.get("/api/v1/orders", headers={"Authorization": f"Bearer {token}"})
         assert listed.status_code == 200
         assert len(listed.json()) == 1
+        duplicate = client.post(
+            "/api/v1/orders",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"idea": "Second project", "display_name": "Ann"},
+        )
+        assert duplicate.status_code == 409
+        assert duplicate.json()["detail"] == "active_commission_exists"
 
 
 def test_admin_status_and_list() -> None:
@@ -121,7 +128,7 @@ def test_github_webhook_closed_issue() -> None:
         )
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
-    assert ctx.notifier.closed
+    assert ctx.notifier.issue_updates
 
 
 def test_github_webhook_rejects_unsigned() -> None:
@@ -192,7 +199,7 @@ def test_github_webhook_duplicate_delivery() -> None:
     assert first.json()["status"] == "ok"
     assert second.status_code == 200
     assert second.json()["status"] == "duplicate"
-    assert len(ctx.notifier.closed) == 1
+    assert len(ctx.notifier.issue_updates) == 1
 
 
 def test_customer_cannot_read_foreign_order() -> None:
