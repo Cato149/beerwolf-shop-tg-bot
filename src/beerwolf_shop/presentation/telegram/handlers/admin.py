@@ -5,12 +5,14 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from beerwolf_shop.application.dto import CompleteOrderDTO, LinkGithubDTO, ManualOrderDTO
+from beerwolf_shop.domain.entities import Order, User
 from beerwolf_shop.domain.enums import OrderStatus, OrderType
 from beerwolf_shop.domain.exceptions import DomainError, GithubIntegrationError
 from beerwolf_shop.infrastructure.github.client import parse_repo_url
@@ -19,7 +21,8 @@ from beerwolf_shop.infrastructure.telegram.keyboards import (
     AdminListCb,
     AdminOrderCb,
     ProjectPickCb,
-    admin_menu,
+    admin_list_keyboard,
+    admin_work_menu,
     confirm_menu,
     main_menu,
     project_choice,
@@ -29,12 +32,15 @@ from beerwolf_shop.infrastructure.telegram.keyboards import (
 from beerwolf_shop.infrastructure.telegram.keyboards import (
     admin_order_card as admin_order_kb,
 )
+from beerwolf_shop.infrastructure.telegram.photos import send_file_id_photos
 from beerwolf_shop.presentation.telegram.context import AppContext
-from beerwolf_shop.presentation.telegram.formatters import (
-    admin_order_card,
-    list_title,
+from beerwolf_shop.presentation.telegram.formatters import admin_order_card
+from beerwolf_shop.presentation.telegram.handlers.common import (
+    LocaleText,
+    build_main_menu,
+    reply_error,
+    require_text,
 )
-from beerwolf_shop.presentation.telegram.handlers.common import LocaleText, reply_error, require_text
 from beerwolf_shop.presentation.telegram.states import (
     AdminComplete,
     AdminLinkGithub,
@@ -45,6 +51,8 @@ logger = logging.getLogger(__name__)
 router = Router(name="admin")
 
 PAGE_SIZE = 5
+ADMIN_CARD_IDS = "admin_card_ids"
+ADMIN_CONTROL_ID = "admin_control_id"
 
 
 def _blank(i18n, value: str | None) -> str | None:
@@ -75,15 +83,51 @@ async def _require_admin(query_or_message: CallbackQuery | Message, is_admin: bo
     return False
 
 
+async def _delete_previous_list(bot: Bot, chat_id: int, state: FSMContext) -> None:
+    data = await state.get_data()
+    ids = [int(mid) for mid in (data.get(ADMIN_CARD_IDS) or [])]
+    control = data.get(ADMIN_CONTROL_ID)
+    if control is not None:
+        ids.append(int(control))
+    for mid in ids:
+        try:
+            await bot.delete_message(chat_id, mid)
+        except TelegramAPIError:
+            pass
+    await state.update_data(**{ADMIN_CARD_IDS: [], ADMIN_CONTROL_ID: None})
+
+
+async def _admin_card_text(ctx: AppContext, locale: str, order: Order) -> str:
+    customer = await ctx.users.get_by_telegram_id(order.customer_telegram_id)
+    parent = await ctx.orders.get(order.parent_order_id) if order.parent_order_id else None
+    text = admin_order_card(ctx.i18n, locale, order, customer, parent)
+    if parent and parent.github_repo_url:
+        text += "\n" + render_md(ctx.i18n, locale, "admin.support_card_extra", repo=parent.github_repo_url)
+    return text
+
+
+async def _send_admin_card(message: Message, ctx: AppContext, locale: str, order: Order) -> list[int]:
+    sent = await message.answer(
+        await _admin_card_text(ctx, locale, order),
+        parse_mode="MarkdownV2",
+        reply_markup=admin_order_kb(order.id, order.status, ctx.i18n, locale, order.type),
+    )
+    ids = [sent.message_id]
+    if order.photo_file_ids:
+        ids.extend(await send_file_id_photos(message.bot, message.chat.id, order.photo_file_ids))
+    return ids
+
+
 @router.message(LocaleText("admin.btn_menu"))
 @router.message(Command("admin"))
 async def open_admin(message: Message, ctx: AppContext, locale: str, is_admin: bool) -> None:
     if not is_admin:
         return
+    stats = await ctx.get_admin_stats.execute()
     await message.answer(
-        render_md(ctx.i18n, locale, "admin.menu"),
+        render_md(ctx.i18n, locale, "admin.menu", **stats),
         parse_mode="MarkdownV2",
-        reply_markup=admin_menu(ctx.i18n, locale),
+        reply_markup=admin_work_menu(ctx.i18n, locale),
     )
 
 
@@ -93,27 +137,79 @@ async def _send_order_list(
     locale: str,
     status_key: str,
     page: int,
+    state: FSMContext,
     *,
     order_type: OrderType | None = None,
 ) -> None:
     status = _status_from_filter(status_key)
     offset = page * PAGE_SIZE
     items, total = await ctx.list_orders.execute(status, order_type, offset=offset, limit=PAGE_SIZE)
-    if not items:
-        await target.answer(render_md(ctx.i18n, locale, "admin.list_empty"), parse_mode="MarkdownV2")
-        return
-    from beerwolf_shop.infrastructure.telegram.keyboards import admin_list_keyboard
-
-    buttons = [(order.id, list_title(order, ctx.i18n, locale)) for order in items]
+    await _delete_previous_list(target.bot, target.chat.id, state)
+    card_ids: list[int] = []
+    for order in items:
+        card_ids.extend(await _send_admin_card(target, ctx, locale, order))
+    pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
     has_next = offset + PAGE_SIZE < total
     kind = order_type.value if order_type is not None else "all"
     title_key = "admin.btn_support_queue" if order_type == OrderType.support else "admin.btn_orders"
-    await target.answer(
-        render_md(ctx.i18n, locale, title_key),
+    header = render_md(
+        ctx.i18n,
+        locale,
+        "admin.list_header",
+        title=ctx.i18n.get(locale, title_key),
+        page=page + 1,
+        pages=pages,
+        total=total,
+    )
+    if not items:
+        header = header + "\n" + render_md(ctx.i18n, locale, "admin.list_empty")
+    control = await target.answer(
+        header,
         parse_mode="MarkdownV2",
-        reply_markup=admin_list_keyboard(
-            ctx.i18n, locale, current=status_key, page=page, has_next=has_next, orders=buttons, kind=kind
-        ),
+        reply_markup=admin_list_keyboard(ctx.i18n, locale, current=status_key, page=page, has_next=has_next, kind=kind),
+    )
+    await state.update_data(**{ADMIN_CARD_IDS: card_ids, ADMIN_CONTROL_ID: control.message_id})
+
+
+@router.message(LocaleText("admin.btn_orders"))
+async def open_orders(message: Message, ctx: AppContext, locale: str, is_admin: bool, state: FSMContext) -> None:
+    if not await _require_admin(message, is_admin):
+        return
+    await _send_order_list(message, ctx, locale, "all", 0, state)
+
+
+@router.message(LocaleText("admin.btn_spam"))
+async def open_spam(message: Message, ctx: AppContext, locale: str, is_admin: bool, state: FSMContext) -> None:
+    if not await _require_admin(message, is_admin):
+        return
+    await _send_order_list(message, ctx, locale, "spam", 0, state)
+
+
+@router.message(LocaleText("admin.btn_support_queue"))
+async def open_support_queue_kb(
+    message: Message, ctx: AppContext, locale: str, is_admin: bool, state: FSMContext
+) -> None:
+    if not await _require_admin(message, is_admin):
+        return
+    await _send_order_list(message, ctx, locale, "application", 0, state, order_type=OrderType.support)
+
+
+@router.message(LocaleText("common.btn_back"))
+async def admin_back(
+    message: Message,
+    ctx: AppContext,
+    user: User,
+    locale: str,
+    is_admin: bool,
+    state: FSMContext,
+) -> None:
+    if not await _require_admin(message, is_admin):
+        return
+    await _delete_previous_list(message.bot, message.chat.id, state)
+    await message.answer(
+        render_md(ctx.i18n, locale, "common.start", name=user.display_name),
+        parse_mode="MarkdownV2",
+        reply_markup=await build_main_menu(ctx, user, locale, is_admin),
     )
 
 
@@ -124,6 +220,7 @@ async def list_orders_cb(
     ctx: AppContext,
     locale: str,
     is_admin: bool,
+    state: FSMContext,
 ) -> None:
     if not await _require_admin(query, is_admin):
         return
@@ -135,33 +232,23 @@ async def list_orders_cb(
             locale,
             callback_data.status,
             callback_data.page,
+            state,
             order_type=_order_type_from_kind(callback_data.kind),
         )
 
 
 @router.callback_query(F.data == "admin:support")
-async def support_queue(query: CallbackQuery, ctx: AppContext, locale: str, is_admin: bool) -> None:
+async def support_queue(query: CallbackQuery, ctx: AppContext, locale: str, is_admin: bool, state: FSMContext) -> None:
     if not await _require_admin(query, is_admin):
         return
     await query.answer()
     if query.message:
-        await _send_order_list(
-            query.message, ctx, locale, "application", 0, order_type=OrderType.support
-        )
+        await _send_order_list(query.message, ctx, locale, "application", 0, state, order_type=OrderType.support)
 
 
 async def _show_admin_card(message: Message, ctx: AppContext, locale: str, order_id: UUID) -> None:
     order = await ctx.get_order.execute(order_id, is_admin=True)
-    customer = await ctx.users.get_by_telegram_id(order.customer_telegram_id)
-    parent = await ctx.orders.get(order.parent_order_id) if order.parent_order_id else None
-    text = admin_order_card(ctx.i18n, locale, order, customer, parent)
-    if parent and parent.github_repo_url:
-        text += "\n" + render_md(ctx.i18n, locale, "admin.support_card_extra", repo=parent.github_repo_url)
-    await message.answer(
-        text,
-        parse_mode="MarkdownV2",
-        reply_markup=admin_order_kb(order.id, order.status, ctx.i18n, locale, order.type),
-    )
+    await _send_admin_card(message, ctx, locale, order)
 
 
 @router.callback_query(AdminOrderCb.filter(F.action == "view"))
@@ -559,18 +646,29 @@ async def got_complete_message(
     )
 
 
+async def _start_manual_wizard(message: Message, ctx: AppContext, locale: str, state: FSMContext) -> None:
+    await state.set_state(AdminManualWizard.customer)
+    await message.answer(
+        render_md(ctx.i18n, locale, "admin.ask_customer_id"),
+        parse_mode="MarkdownV2",
+        reply_markup=wizard_menu(ctx.i18n, locale, with_skip=False),
+    )
+
+
+@router.message(LocaleText("admin.btn_create"))
+async def start_manual_kb(message: Message, ctx: AppContext, locale: str, is_admin: bool, state: FSMContext) -> None:
+    if not await _require_admin(message, is_admin):
+        return
+    await _start_manual_wizard(message, ctx, locale, state)
+
+
 @router.callback_query(F.data == "admin:create")
 async def start_manual(query: CallbackQuery, ctx: AppContext, locale: str, is_admin: bool, state: FSMContext) -> None:
     if not await _require_admin(query, is_admin):
         return
-    await state.set_state(AdminManualWizard.customer)
     await query.answer()
     if query.message:
-        await query.message.answer(
-            render_md(ctx.i18n, locale, "admin.ask_customer_id"),
-            parse_mode="MarkdownV2",
-            reply_markup=wizard_menu(ctx.i18n, locale, with_skip=False),
-        )
+        await _start_manual_wizard(query.message, ctx, locale, state)
 
 
 @router.message(AdminManualWizard.customer)

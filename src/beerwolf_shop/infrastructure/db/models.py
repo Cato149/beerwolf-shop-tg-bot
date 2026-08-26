@@ -81,6 +81,10 @@ class OrderTable(SQLModel, table=True):
     github_milestone_title: str | None = None
     project_display_name: str | None = None
     completion_message: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    photo_file_ids: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False, server_default="[]"),
+    )
     created_at: datetime = Field(default_factory=_utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
     updated_at: datetime = Field(default_factory=_utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
 
@@ -112,6 +116,7 @@ class OrderTable(SQLModel, table=True):
             github_milestone_title=self.github_milestone_title,
             project_display_name=self.project_display_name,
             completion_message=self.completion_message,
+            photo_file_ids=list(self.photo_file_ids or []),
             created_at=self.created_at,
             updated_at=self.updated_at,
             links=[row.to_domain() for row in raw_links],
@@ -137,6 +142,7 @@ class OrderTable(SQLModel, table=True):
             github_milestone_title=order.github_milestone_title,
             project_display_name=order.project_display_name,
             completion_message=order.completion_message,
+            photo_file_ids=list(order.photo_file_ids or []),
             created_at=order.created_at,
             updated_at=order.updated_at,
         )
@@ -158,6 +164,7 @@ class OrderTable(SQLModel, table=True):
         self.github_milestone_title = order.github_milestone_title
         self.project_display_name = order.project_display_name
         self.completion_message = order.completion_message
+        self.photo_file_ids = list(order.photo_file_ids or [])
         self.updated_at = order.updated_at
 
 

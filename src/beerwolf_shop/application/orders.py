@@ -6,7 +6,7 @@ from uuid import UUID
 
 from beerwolf_shop.application.dto import CompleteOrderDTO, ManualOrderDTO, SubmitOrderDTO
 from beerwolf_shop.domain.entities import CompletionLink, Order, User
-from beerwolf_shop.domain.enums import OrderStatus, OrderType
+from beerwolf_shop.domain.enums import LOCKED_CUSTOMER_STATUSES, OrderStatus, OrderType
 from beerwolf_shop.domain.exceptions import (
     AccessDeniedError,
     ActiveCommissionExistsError,
@@ -54,7 +54,12 @@ class SubmitOrder:
             await self._orders.lock_customer(dto.customer_telegram_id)
             active = await self._orders.get_active_commission(dto.customer_telegram_id)
             if active is not None:
-                raise ActiveCommissionExistsError(str(active.id))
+                # A pending application can be rewritten; discussion/in_progress stay exclusive.
+                if active.status in LOCKED_CUSTOMER_STATUSES:
+                    raise ActiveCommissionExistsError(str(active.id))
+                active.status = OrderStatus.cancelled
+                active.touch()
+                await self._orders.save(active)
         user = await self._users.get_by_telegram_id(dto.customer_telegram_id)
         if user is None:
             user = User(
@@ -80,6 +85,7 @@ class SubmitOrder:
             budget=dto.budget,
             parent_order_id=dto.parent_order_id,
             status=OrderStatus.application,
+            photo_file_ids=list(dto.photo_file_ids),
         )
         return await self._orders.add(order)
 
@@ -128,6 +134,20 @@ class ListOrders:
         items = await self._orders.list_by_status(status, order_type, offset=offset, limit=limit)
         total = await self._orders.count_by_status(status, order_type)
         return items, total
+
+
+class GetAdminStats:
+    """Counts for the admin landing: new applications, projects in work, completed."""
+
+    def __init__(self, orders: OrderRepository) -> None:
+        self._orders = orders
+
+    async def execute(self) -> dict[str, int]:
+        return {
+            "new": await self._orders.count_by_status(OrderStatus.application, OrderType.commission),
+            "in_progress": await self._orders.count_by_status(OrderStatus.in_progress, OrderType.commission),
+            "completed": await self._orders.count_by_status(OrderStatus.completed, OrderType.commission),
+        }
 
 
 class GetOrder:

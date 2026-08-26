@@ -20,6 +20,7 @@ class SubmitOrderDTO(BaseModel):
     language: str = "ru"
     order_type: OrderType = OrderType.commission
     parent_order_id: UUID | None = None
+    photo_file_ids: list[str] = Field(default_factory=list)
 
 
 class ManualOrderDTO(BaseModel):

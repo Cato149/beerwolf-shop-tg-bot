@@ -26,17 +26,23 @@ locales/
 tests/
 ```
 
-Один заказ = одно репо + один Project v2. У клиента может быть только одна незавершённая основная комиссия
-(`application`, `discussion` или `in_progress`). Support-заявки — отдельные `Order(type=support)` с
+Один заказ = одно репо + один Project v2. У клиента может быть только одна комиссия в `discussion`
+или `in_progress`. Заявку в статусе `application` можно заменить новой, пока админ не взял её дальше.
+Support-заявки — отдельные `Order(type=support)` с
 `parent_order_id`; при взятии такой заявки бот создаёт отдельный GitHub milestone и временно возвращает
 основной проект в работу.
 
 Клиентская reply-клавиатура зависит от состояния проекта:
 
 - новый клиент видит только создание заявки и смену языка;
-- при незавершённой комиссии доступен «Мой заказ», но нет новой заявки;
+- пока заявка в статусе `application` (ещё не взята в обсуждение/работу), кнопка новой заявки остаётся — повторная отправка заменяет предыдущую;
+- в `discussion` и `in_progress` доступен «Мой заказ», новой заявки нет;
 - во время и после работы доступна рекомендация бота;
 - после завершения снова можно создать новую комиссию.
+
+В мастере заявки можно присылать фото (в том числе альбомом); они сохраняются в заявке и уходят админу вместе с карточкой.
+
+Админ-панель показывает счётчики новых / в работе / готовых комиссий. Список заявок — карточки по 5 на страницу, под ними фильтры и пагинация. Спам, очередь поддержки и создание заявки — на reply-клавиатуре админки.
 
 ## Запуск
 
@@ -72,34 +78,30 @@ docker compose up --build
 
 Сервисы только `app` и `db`. Переменные не переназначаются в compose — только `env_file: .env`.
 
-Порт приложения опубликован как `127.0.0.1:8000` — снаружи его закрывает Caddy на хосте.
+Порт приложения опубликован как `127.0.0.1:8000`. Снаружи его должен закрывать reverse proxy на хосте.
 
-### Caddy (на сервере, вне Docker)
+### Caddyfile (на хосте, не в репозитории)
 
-Caddy ставится на хост (пакет или бинарник), в Compose его нет. Он выдаёт HTTPS и проксирует на `127.0.0.1:8000`.
+Caddy в Compose нет. На сервере в свой `/etc/caddy/Caddyfile` добавьте сайт с `reverse_proxy` на loopback-порт приложения. `PUBLIC_BASE_URL` в `.env` должен совпадать с этим хостом (`https://...`, без `/` на конце), `BOT_MODE=webhook`.
 
-1. DNS A/AAAA `CADDY_DOMAIN` → IP сервера, открыты порты 80 и 443.
-2. В `.env`: `CADDY_DOMAIN`, `CADDY_EMAIL`, `PUBLIC_BASE_URL=https://<CADDY_DOMAIN>`, `BOT_MODE=webhook`, `APP_PORT=8000`.
-3. Запуск из корня репозитория:
+```caddyfile
+{
+	email you@example.com
+}
 
-```bash
-caddy run --envfile .env --config Caddyfile
+bot.example.com {
+	encode gzip zstd
+
+	reverse_proxy 127.0.0.1:8000 {
+		transport http {
+			read_timeout 60s
+			write_timeout 60s
+		}
+	}
+}
 ```
 
-Пакет Debian/Ubuntu: symlink `Caddyfile` в `/etc/caddy/Caddyfile` и drop-in systemd, чтобы подтянуть `.env`:
-
-```ini
-# /etc/systemd/system/caddy.service.d/beerwolf.conf
-[Service]
-EnvironmentFile=/absolute/path/to/beerwolf-shop-tg-bot/.env
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl reload caddy
-```
-
-После этого Telegram и GitHub ходят на `https://<CADDY_DOMAIN>/webhooks/...`.
+Нужны DNS A/AAAA на этот хост и открытые порты 80/443. После `caddy reload` Telegram и GitHub ходят на `https://bot.example.com/webhooks/...`.
 
 ### Тесты и линт
 
@@ -119,7 +121,6 @@ uv run pytest
 | `BOT_TOKEN` | токен бота |
 | `BOT_MODE` | `polling` или `webhook` |
 | `PUBLIC_BASE_URL` | публичный HTTPS origin, без `/` на конце |
-| `CADDY_DOMAIN` / `CADDY_EMAIL` | хост и ACME-почта для Caddyfile (Python их не читает) |
 | `TELEGRAM_WEBHOOK_SECRET` | секрет заголовка Telegram webhook |
 | `ADMIN_TELEGRAM_IDS` | id админов через запятую |
 | `ADMIN_TELEGRAM_CONTACT` | контакт, который видит заказчик в статусе «Обсуждение» |
@@ -187,7 +188,7 @@ lazysql
 После зелёных `lint-and-test` и `docker` push (или ручной `workflow_dispatch`) в `main` job **Deploy to production**:
 
 1. по SSH передаёт секрет `APP_ENV` и на сервере пишет `.env` (`chmod 600`);
-2. делает `git pull`, `docker compose up --build -d`, копирует `Caddyfile` в `/etc/caddy/` и `systemctl reload`.
+2. делает `git pull` и `docker compose up --build -d`. Reverse proxy на хосте настраивается отдельно (см. Caddyfile выше).
 
 Environment в GitHub: **production** (Settings → Environments).
 
@@ -201,7 +202,7 @@ Environment в GitHub: **production** (Settings → Environments).
 | `DEPLOY_SSH_KEY` | приватный ключ входа CI на VPS |
 | `GIT_SSH_KEY` | приватный ключ **Deploy key** репозитория (тот же, чей `.pub` в Settings → Deploy keys) |
 
-В `APP_ENV` для Compose укажите `DATABASE_URL` с хостом `db`, `BOT_MODE=webhook`, `PUBLIC_BASE_URL` / `CADDY_DOMAIN` / `CADDY_EMAIL` как на проде.
+В `APP_ENV` для Compose укажите `DATABASE_URL` с хостом `db`, `BOT_MODE=webhook` и `PUBLIC_BASE_URL` как публичный HTTPS-хост из Caddyfile.
 
 ### Variables
 
@@ -210,7 +211,7 @@ Environment в GitHub: **production** (Settings → Environments).
 | `DEPLOY_PATH` | абсолютный путь клона на сервере |
 | `DEPLOY_SSH_PORT` | SSH-порт, по умолчанию `22` |
 
-Первый раз на сервере: пользователь `DEPLOY_USER` в группе `docker`, sudo без пароля на `cp`/`systemctl reload caddy`. Каталог `DEPLOY_PATH` пустой или его ещё нет. `.env` руками не нужен.
+Первый раз на сервере: пользователь `DEPLOY_USER` в группе `docker`. Каталог `DEPLOY_PATH` пустой или его ещё нет. `.env` руками не нужен. Caddy на хосте настраивается отдельно.
 
 Два разных SSH-ключа:
 

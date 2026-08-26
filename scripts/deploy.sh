@@ -1,5 +1,5 @@
 #!/bin/sh
-# Production update on the VPS: sync git over SSH, write .env, rebuild Compose, reload host Caddy.
+# Production update on the VPS: sync git over SSH, write .env, rebuild Compose.
 # GitHub Actions passes APP_ENV. Clone/fetch use git@github.com and a Deploy key on this host.
 set -eu
 
@@ -30,9 +30,3 @@ fi
 
 docker compose up --build -d --remove-orphans
 docker image prune -f
-
-# Caddy lives on the host; keep /etc/caddy in sync with the repo and reload.
-if [ -d /etc/caddy ]; then
-	sudo cp "$ROOT/Caddyfile" /etc/caddy/Caddyfile
-	sudo systemctl reload caddy
-fi

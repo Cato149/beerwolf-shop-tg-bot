@@ -71,6 +71,7 @@ class Order:
     github_milestone_title: str | None = None
     project_display_name: str | None = None
     completion_message: str | None = None
+    photo_file_ids: list[str] = field(default_factory=list)
     id: UUID = field(default_factory=uuid4)
     created_at: datetime = field(default_factory=_utcnow)
     updated_at: datetime = field(default_factory=_utcnow)

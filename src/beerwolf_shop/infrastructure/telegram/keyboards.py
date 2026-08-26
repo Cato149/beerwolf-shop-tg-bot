@@ -10,7 +10,7 @@ from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 from beerwolf_shop.domain.entities import Order
-from beerwolf_shop.domain.enums import OrderStatus, OrderType
+from beerwolf_shop.domain.enums import LOCKED_CUSTOMER_STATUSES, OrderStatus, OrderType
 from beerwolf_shop.infrastructure.telegram.i18n import I18n
 from beerwolf_shop.infrastructure.telegram.markdown import render_locale
 
@@ -62,7 +62,7 @@ def _label(i18n: I18n, locale: str, key: str, **kwargs: object) -> str:
 
 def main_menu(i18n: I18n, locale: str, *, is_admin: bool, project: Order | None = None) -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
-    if project is None or project.status == OrderStatus.completed:
+    if project is None or project.status not in LOCKED_CUSTOMER_STATUSES:
         builder.button(text=_label(i18n, locale, "common.btn_new_order"))
     if project is not None:
         builder.button(text=_label(i18n, locale, "common.btn_my_order"))
@@ -199,38 +199,41 @@ def admin_list_keyboard(
     current: str,
     page: int,
     has_next: bool,
-    orders: list[tuple[UUID, str]],
     kind: str = "all",
 ) -> InlineKeyboardMarkup:
+    """Status filters and pagination under the admin order list. Cards are sent separately."""
     builder = InlineKeyboardBuilder()
-    for order_id, title in orders:
-        builder.button(text=title, callback_data=AdminOrderCb(action="view", order_id=str(order_id)))
     for key, _status in STATUS_FILTERS:
         marker = "• " if key == current else ""
         builder.button(
             text=f"{marker}{_label(i18n, locale, f'admin.filter_{key}')}",
             callback_data=AdminListCb(status=key, page=0, kind=kind),
         )
-    nav = []
+    nav: list[tuple[str, AdminListCb]] = []
     if page > 0:
         nav.append(("common.btn_prev", AdminListCb(status=current, page=page - 1, kind=kind)))
     if has_next:
         nav.append(("common.btn_next", AdminListCb(status=current, page=page + 1, kind=kind)))
     for key, cb in nav:
         builder.button(text=_label(i18n, locale, key), callback_data=cb)
-    builder.button(text=_label(i18n, locale, "admin.btn_create"), callback_data="admin:create")
-    builder.button(text=_label(i18n, locale, "admin.btn_support_queue"), callback_data="admin:support")
-    builder.adjust(1, 1, 1, 1, 1, 3, 3, 2, 2)
+    # 7 filters in 3+3+1, then prev/next on their own row when present.
+    sizes = [3, 3, 1]
+    if nav:
+        sizes.append(len(nav))
+    builder.adjust(*sizes)
     return builder.as_markup()
 
 
-def admin_menu(i18n: I18n, locale: str) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text=_label(i18n, locale, "admin.btn_orders"), callback_data=AdminListCb(status="all", page=0))
-    builder.button(text=_label(i18n, locale, "admin.btn_support_queue"), callback_data="admin:support")
-    builder.button(text=_label(i18n, locale, "admin.btn_create"), callback_data="admin:create")
-    builder.adjust(1)
-    return builder.as_markup()
+def admin_work_menu(i18n: I18n, locale: str) -> ReplyKeyboardMarkup:
+    """Reply keyboard while an admin is in the panel (list, spam, support, create)."""
+    builder = ReplyKeyboardBuilder()
+    builder.button(text=_label(i18n, locale, "admin.btn_orders"))
+    builder.button(text=_label(i18n, locale, "admin.btn_spam"))
+    builder.button(text=_label(i18n, locale, "admin.btn_support_queue"))
+    builder.button(text=_label(i18n, locale, "admin.btn_create"))
+    builder.button(text=_label(i18n, locale, "common.btn_back"))
+    builder.adjust(2, 2, 1)
+    return builder.as_markup(resize_keyboard=True)
 
 
 def project_choice(projects: list[tuple[str, str]]) -> InlineKeyboardMarkup:
@@ -251,8 +254,6 @@ def customer_order_actions(
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     oid = str(order_id)
-    if status == OrderStatus.in_progress:
-        builder.button(text=_label(i18n, locale, "customer.btn_request"), callback_data=f"cust:req:{oid}")
     if status == OrderStatus.completed:
         builder.button(text=_label(i18n, locale, "customer.btn_links"), callback_data=f"cust:links:{oid}")
         if order_type == OrderType.commission:
@@ -273,8 +274,15 @@ def progress_milestones(
     locale: str,
     order_id: UUID,
     milestones: list,
+    *,
+    show_request: bool = False,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    if show_request:
+        builder.button(
+            text=_label(i18n, locale, "customer.btn_request"),
+            callback_data=f"cust:req:{order_id}",
+        )
     for milestone in milestones:
         due = f" · {milestone.due_on[:10]}" if milestone.due_on else ""
         builder.button(

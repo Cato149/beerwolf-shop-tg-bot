@@ -1,7 +1,14 @@
+from uuid import uuid4
+
 from beerwolf_shop.domain.entities import Order
 from beerwolf_shop.domain.enums import OrderStatus, OrderType
 from beerwolf_shop.infrastructure.telegram.i18n import I18n
-from beerwolf_shop.infrastructure.telegram.keyboards import main_menu
+from beerwolf_shop.infrastructure.telegram.keyboards import (
+    admin_list_keyboard,
+    admin_work_menu,
+    main_menu,
+    progress_milestones,
+)
 
 
 def test_ru_and_en_have_core_keys() -> None:
@@ -54,3 +61,29 @@ def test_main_menu_follows_project_lifecycle() -> None:
     project.status = OrderStatus.completed
     completed = _menu_texts(main_menu(i18n, "ru", is_admin=False, project=project))
     assert {"Новая заявка", "Мой заказ", "Порекомендовать", "Язык"} <= completed
+
+    project.status = OrderStatus.application
+    pending = _menu_texts(main_menu(i18n, "ru", is_admin=False, project=project))
+    assert {"Новая заявка", "Мой заказ", "Язык"} <= pending
+    assert "Порекомендовать" not in pending
+
+    project.status = OrderStatus.discussion
+    discussed = _menu_texts(main_menu(i18n, "ru", is_admin=False, project=project))
+    assert "Новая заявка" not in discussed
+    assert "Мой заказ" in discussed
+
+
+def test_admin_list_keyboard_keeps_filters_without_legacy_actions() -> None:
+    i18n = I18n(default_locale="ru")
+    markup = admin_list_keyboard(i18n, "ru", current="all", page=0, has_next=True)
+    texts = {button.text for row in markup.inline_keyboard for button in row}
+    assert "Создать заявку" not in texts
+    assert "Очередь поддержки" not in texts
+    assert "• Все" in texts
+    assert "Старее" in texts
+
+    work = _menu_texts(admin_work_menu(i18n, "ru"))
+    assert work == {"Заявки", "Спам", "Очередь поддержки", "Создать заявку", "Назад"}
+
+    progress = progress_milestones(i18n, "ru", uuid4(), [], show_request=True)
+    assert progress.inline_keyboard[0][0].text == "Запросить правку / идею"

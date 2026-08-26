@@ -62,14 +62,14 @@ async def _send_project(message: Message, ctx: AppContext, user: User, locale: s
         await message.answer(
             progress_message(ctx.i18n, locale, order.project_display_name or "", snapshot),
             parse_mode="MarkdownV2",
-            reply_markup=progress_milestones(ctx.i18n, locale, order.id, snapshot.milestones),
+            reply_markup=progress_milestones(
+                ctx.i18n,
+                locale,
+                order.id,
+                snapshot.milestones,
+                show_request=order.type == OrderType.commission,
+            ),
         )
-        if order.type == OrderType.commission:
-            await message.answer(
-                render_md(ctx.i18n, locale, "customer.request_hint"),
-                parse_mode="MarkdownV2",
-                reply_markup=_actions(ctx, locale, order),
-            )
         return
     if order.status in {OrderStatus.application, OrderStatus.discussion}:
         text = render_md(
