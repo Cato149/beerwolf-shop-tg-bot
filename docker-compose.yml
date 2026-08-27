@@ -24,5 +24,40 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # Idempotent CREATE DATABASE for Umami. Needed when postgres_data already exists.
+  umami-db-init:
+    image: postgres:16-alpine
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./scripts/ensure-umami-db.sh:/ensure-umami-db.sh:ro
+    entrypoint: ["/bin/sh", "/ensure-umami-db.sh"]
+    restart: "no"
+
+  umami:
+    image: ghcr.io/umami-software/umami:postgresql-latest
+    env_file: .env
+    # Loopback only: reverse-proxy this port (see README Caddyfile).
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./scripts/umami-start.sh:/umami-start.sh:ro
+    command: ["sh", "/umami-start.sh"]
+    depends_on:
+      db:
+        condition: service_healthy
+      umami-db-init:
+        condition: service_completed_successfully
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/heartbeat"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
 volumes:
   postgres_data:

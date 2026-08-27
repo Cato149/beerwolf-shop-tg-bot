@@ -22,6 +22,10 @@ if ! grep -q '^BOT_TOKEN=' "$tmp" || ! grep -q '^DATABASE_URL=' "$tmp"; then
 	echo "write-env: APP_ENV does not look like a valid .env (need BOT_TOKEN and DATABASE_URL)" >&2
 	exit 1
 fi
+if ! grep -q '^UMAMI_DATABASE_URL=' "$tmp" || ! grep -q '^UMAMI_APP_SECRET=' "$tmp"; then
+	echo "write-env: APP_ENV is missing UMAMI_DATABASE_URL or UMAMI_APP_SECRET" >&2
+	exit 1
+fi
 
 chmod 644 "$tmp"
 mv "$tmp" "$ENV_FILE"

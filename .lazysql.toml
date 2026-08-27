@@ -10,3 +10,10 @@ Name = "beerwolf local"
 Provider = "postgres"
 DBName = "beerwolf"
 URL = "postgres://${env:POSTGRES_USER}:${env:POSTGRES_PASSWORD}@localhost:5432/${env:POSTGRES_DB}?sslmode=disable"
+
+[[database]]
+# Same Postgres instance as the bot, separate logical database for Umami tables.
+Name = "umami local"
+Provider = "postgres"
+DBName = "umami"
+URL = "postgres://${env:POSTGRES_USER}:${env:POSTGRES_PASSWORD}@localhost:5432/${env:UMAMI_POSTGRES_DB}?sslmode=disable"

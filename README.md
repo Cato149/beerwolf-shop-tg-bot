@@ -67,22 +67,27 @@ uv run uvicorn beerwolf_shop.main:app --reload --host 0.0.0.0 --port 8000
 
 ### Docker Compose
 
-В `.env` для контейнера `DATABASE_URL` должен указывать на хост `db`:
+В `.env` для контейнера `DATABASE_URL` и `UMAMI_DATABASE_URL` должны указывать на хост `db`:
 
-`postgresql+asyncpg://beerwolf:beerwolf@db:5432/beerwolf`
+`postgresql+asyncpg://beerwolf:beerwolf@db:5432/beerwolf`  
+`postgresql://beerwolf:beerwolf@db:5432/umami`
 
 ```bash
 cp .env.example .env
 docker compose up --build
 ```
 
-Сервисы только `app` и `db`. Переменные не переназначаются в compose — только `env_file: .env`.
+Сервисы: `app`, `db`, `umami-db-init`, `umami`. Переменные не переназначаются в compose — только `env_file: .env`.
 
-Порт приложения опубликован как `127.0.0.1:8000`. Снаружи его должен закрывать reverse proxy на хосте.
+Umami живёт на том же Postgres (`db`), в отдельной логической базе `UMAMI_POSTGRES_DB` (по умолчанию `umami`). `umami-db-init` создаёт её при необходимости, в том числе на уже существующем томе.
+
+Порт приложения опубликован как `127.0.0.1:8000`, Umami — `127.0.0.1:3000`. Снаружи оба закрывает reverse proxy на хосте.
+
+Первый вход в Umami: пользователь `admin`, пароль `umami`. Сразу смените пароль.
 
 ### Caddyfile (на хосте, не в репозитории)
 
-Caddy в Compose нет. На сервере в свой `/etc/caddy/Caddyfile` добавьте сайт с `reverse_proxy` на loopback-порт приложения. `PUBLIC_BASE_URL` в `.env` должен совпадать с этим хостом (`https://...`, без `/` на конце), `BOT_MODE=webhook`.
+Caddy в Compose нет. На сервере в свой `/etc/caddy/Caddyfile` добавьте сайты: бот на `127.0.0.1:8000` и Umami на `127.0.0.1:3000`. `PUBLIC_BASE_URL` в `.env` должен совпадать с хостом бота (`https://...`, без `/` на конце), `BOT_MODE=webhook`.
 
 ```caddyfile
 {
@@ -99,9 +104,20 @@ bot.example.com {
 		}
 	}
 }
+
+stats.example.com {
+	encode gzip zstd
+
+	reverse_proxy 127.0.0.1:3000 {
+		transport http {
+			read_timeout 60s
+			write_timeout 60s
+		}
+	}
+}
 ```
 
-Нужны DNS A/AAAA на этот хост и открытые порты 80/443. После `caddy reload` Telegram и GitHub ходят на `https://bot.example.com/webhooks/...`.
+Нужны DNS A/AAAA на эти хосты и открытые порты 80/443. После `caddy reload` Telegram и GitHub ходят на `https://bot.example.com/webhooks/...`, Umami — на `https://stats.example.com`.
 
 ### Тесты и линт
 
@@ -126,8 +142,14 @@ uv run pytest
 | `ADMIN_TELEGRAM_CONTACT` | контакт, который видит заказчик в статусе «Обсуждение» |
 | `ADMIN_API_TOKEN` | Bearer для `/api/v1/admin/*` |
 | `JWT_SECRET` / `JWT_EXPIRE_MINUTES` | JWT после initData |
-| `DATABASE_URL` | SQLAlchemy async URL |
-| `POSTGRES_USER/PASSWORD/DB` | для образа Postgres, синхронизировать с URL |
+| `DATABASE_URL` | SQLAlchemy async URL бота |
+| `POSTGRES_USER/PASSWORD/DB` | для образа Postgres, синхронизировать с URL бота |
+| `UMAMI_DATABASE_URL` | Prisma URL Umami (`postgresql://…@db:5432/umami`) |
+| `UMAMI_POSTGRES_DB` | имя логической БД Umami на том же Postgres |
+| `UMAMI_APP_SECRET` | секрет сессий Umami |
+| `UMAMI_TWO_FACTOR_ENCRYPTION_KEY` | 64 hex-символа для 2FA Umami |
+| `UMAMI_CLIENT_IP_HEADER` | заголовок IP за прокси, обычно `x-forwarded-for` |
+| `UMAMI_DISABLE_TELEMETRY` | `1` чтобы отключить телеметрию Umami |
 | `GITHUB_TOKEN` | REST issues/milestones/hooks + GraphQL Projects v2 |
 | `GITHUB_WEBHOOK_SECRET` | HMAC webhook GitHub |
 | `GITHUB_STATUS_BACKLOG` / `IN_PROGRESS` / `DONE` | имена опций поля Status в Project |
@@ -181,7 +203,7 @@ set -a && source .env && set +a
 lazysql
 ```
 
-Навык `add-config-to-lazysql` в среде не найден — конфиг добавлен по формату [lazysql](https://github.com/jorgerojas26/lazysql).
+Навык `add-config-to-lazysql` в среде не найден — конфиг добавлен по формату [lazysql](https://github.com/jorgerojas26/lazysql). В файле два подключения: бот (`POSTGRES_DB`) и Umami (`UMAMI_POSTGRES_DB`).
 
 ## Деплой (GitHub Actions)
 
@@ -202,7 +224,7 @@ Environment в GitHub: **production** (Settings → Environments).
 | `DEPLOY_SSH_KEY` | приватный ключ входа CI на VPS |
 | `GIT_SSH_KEY` | приватный ключ **Deploy key** репозитория (тот же, чей `.pub` в Settings → Deploy keys) |
 
-В `APP_ENV` для Compose укажите `DATABASE_URL` с хостом `db`, `BOT_MODE=webhook` и `PUBLIC_BASE_URL` как публичный HTTPS-хост из Caddyfile.
+В `APP_ENV` для Compose укажите `DATABASE_URL` с хостом `db`, `UMAMI_DATABASE_URL` с хостом `db`, `BOT_MODE=webhook` и `PUBLIC_BASE_URL` как публичный HTTPS-хост из Caddyfile.
 
 ### Variables
 
